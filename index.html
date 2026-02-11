@@ -1,0 +1,4470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TOPDOUW: Abyss of Ashes</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0a0a; display:flex; justify-content:center; align-items:center; height:100vh; overflow:hidden; }
+canvas { image-rendering:pixelated; image-rendering:crisp-edges; cursor:crosshair; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ==================== CONFIGURATION ====================
+const TILE = 16, SCALE = 3, CW = 960, CH = 640;
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = CW; canvas.height = CH;
+ctx.imageSmoothingEnabled = false;
+
+// ==================== ASSET LOADER ====================
+const images = {};
+let assetsLoaded = 0, assetsTotal = 0;
+
+function loadImg(name, src) {
+  assetsTotal++;
+  const img = new Image();
+  img.onload = () => { images[name] = img; assetsLoaded++; };
+  img.onerror = () => { assetsLoaded++; console.warn('Failed:', src); };
+  img.src = src;
+}
+
+function loadAllAssets() {
+  const base = '';
+  loadImg('character', base+'dungeon-assets/2D Pixel Dungeon Asset Pack/character and tileset/Dungeon_Character.png');
+  loadImg('character2', base+'dungeon-assets/2D Pixel Dungeon Asset Pack/character and tileset/Dungeon_Character_2.png');
+  loadImg('tileset', base+'dungeon-assets/2D Pixel Dungeon Asset Pack/character and tileset/Dungeon_Tileset.png');
+  loadImg('wallsFloor', base+'free-dungeon-assets/PNG/walls_floor.png');
+  loadImg('objects', base+'free-dungeon-assets/PNG/Objects.png');
+  loadImg('fire', base+'free-dungeon-assets/PNG/fire_animation.png');
+  loadImg('fire2', base+'free-dungeon-assets/PNG/fire_animation2.png');
+  loadImg('doorsChest', base+'free-dungeon-assets/PNG/doors_lever_chest_animation.png');
+  loadImg('cracksFloor', base+'free-dungeon-assets/PNG/decorative_cracks_floor.png');
+  loadImg('cracksWalls', base+'free-dungeon-assets/PNG/decorative_cracks_walls.png');
+  loadImg('cursedGround', base+'cursed-land-assets/PNG/Ground.png');
+  loadImg('cursedObjects', base+'cursed-land-assets/PNG/Objects.png');
+  loadImg('fireTiles', base+'DG Fire Zone Expansion Free Ver./All Tiles Free Ver..png');
+  loadImg('waterCoasts', base+'cursed-land-assets/PNG/Water_coasts.png');
+  loadImg('spots', base+'cursed-land-assets/PNG/spots.png');
+  loadImg('details', base+'cursed-land-assets/PNG/details.png');
+  loadImg('bridges', base+'cursed-land-assets/PNG/bridges.png');
+  // Monsters (v1 + v2 variants)
+  for (let i = 1; i <= 4; i++) {
+    loadImg('vampire_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/vampire/v1/vampire_v1_'+i+'.png');
+    loadImg('skull_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skull/v1/skull_v1_'+i+'.png');
+    loadImg('skeleton_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skeleton1/v1/skeleton_v1_'+i+'.png');
+    loadImg('priest_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/Character_animation/priests_idle/priest1/v1/priest1_v1_'+i+'.png');
+    loadImg('skeleton2_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skeleton2/v1/skeleton_v1_'+i+'.png');
+    loadImg('vampire2_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/vampire/v2/vampire_v2_'+i+'.png');
+    loadImg('skull2_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skull/v2/skull_v2_'+i+'.png');
+    loadImg('priest2_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/Character_animation/priests_idle/priest2/v1/priest2_v1_'+i+'.png');
+  }
+  // Items
+  for (let i = 1; i <= 4; i++) {
+    loadImg('coin_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/items and trap_animation/coin/coin_'+i+'.png');
+    loadImg('flask_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/items and trap_animation/flasks/flasks_1_'+i+'.png');
+    loadImg('flask2_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/items and trap_animation/flasks/flasks_2_'+i+'.png');
+    loadImg('key_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/items and trap_animation/keys/keys_1_'+i+'.png');
+    loadImg('torch_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/items and trap_animation/torch/torch_'+i+'.png');
+    loadImg('flag_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/items and trap_animation/flag/flag_'+i+'.png');
+    loadImg('chest_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/items and trap_animation/chest/chest_'+i+'.png');
+    loadImg('chestOpen_'+i, base+'dungeon-assets/2D Pixel Dungeon Asset Pack/items and trap_animation/chest/chest_open_'+i+'.png');
+  }
+}
+
+// Global dt for functions that need it
+let dt = 0.016;
+
+// ==================== INPUT ====================
+const keys = {};
+const mouse = { x: 0, y: 0, down: false, clicked: false };
+document.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if (gameState === STATE.MATH) mathInputBuffer.push(e.key);
+  e.preventDefault();
+});
+document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+canvas.addEventListener('mousemove', e => { const r = canvas.getBoundingClientRect(); mouse.x = (e.clientX-r.left)*(CW/r.width); mouse.y = (e.clientY-r.top)*(CH/r.height); });
+canvas.addEventListener('mousedown', () => { mouse.down = true; mouse.clicked = true; });
+canvas.addEventListener('mouseup', () => { mouse.down = false; });
+
+// ==================== GAME STATE ====================
+const STATE = { LOADING:'loading', TITLE:'title', INTRO:'intro', TUTORIAL:'tutorial', WEAPON_CHOICE:'weapon_choice', GAMEPLAY:'gameplay', DIALOG:'dialog', SHOP:'shop', BONFIRE:'bonfire', BOSS_INTRO:'boss_intro', GAME_OVER:'game_over', CUTSCENE:'cutscene', MATTER_CUTSCENE:'matter_cutscene', WIN:'win', PAUSE:'pause', MATH:'math' };
+let gameState = STATE.LOADING;
+let stateTimer = 0;
+let dialogText = '';
+let dialogCallback = null;
+let introStep = 0;
+let bonfireMenu = 0;
+let shopPage = 0;
+let cutsceneTimer = 0;
+let matterCutsceneTimer = 0;
+let matterCutsceneIndex = 0;
+let pauseMenu = 0;
+let pausePrevState = STATE.GAMEPLAY;
+
+// Math challenge system
+let mathProblem = null;   // { question, answer, tierName }
+let mathInput = '';
+let mathCallback = null;
+let mathResult = null;    // null, 'correct', 'wrong'
+let mathResultTimer = 0;
+let mathAttempts = 0;
+let mathInputBuffer = [];
+let mathPrevState = STATE.GAMEPLAY;
+
+// Objective arrow system
+let showObjectiveArrow = true;
+let pathHintText = '';
+let pathHintTimer = 0;
+
+const MATH_TIER = {
+  tutorial: 1, ashWastes: 2, boneCaverns: 3, cursedGrounds: 4,
+  fireDepths: 5, shadowRuins: 6, dragonLair: 7
+};
+const MATH_TIER_NAMES = {
+  1: 'Addition & Subtraction', 2: 'Multiplication', 3: 'Division & Mixed',
+  4: 'Fractions', 5: 'Percentages', 6: 'Order of Operations',
+  7: 'Equations'
+};
+
+// ==================== CAMERA ====================
+const camera = { x: 0, y: 0 };
+function updateCamera(target, mapW, mapH) {
+  camera.x = target.x * SCALE * TILE - CW / 2 + TILE * SCALE / 2;
+  camera.y = target.y * SCALE * TILE - CH / 2 + TILE * SCALE / 2;
+  camera.x = Math.max(0, Math.min(camera.x, mapW * TILE * SCALE - CW));
+  camera.y = Math.max(0, Math.min(camera.y, mapH * TILE * SCALE - CH));
+  // Apply screen shake
+  camera.x += shake.x; camera.y += shake.y;
+}
+
+// ==================== SCREEN SHAKE ====================
+const shake = { x:0, y:0, intensity:0, timer:0 };
+function addShake(intensity, duration) {
+  shake.intensity = Math.max(shake.intensity, intensity);
+  shake.timer = Math.max(shake.timer, duration);
+}
+function updateShake(dt) {
+  if (shake.timer > 0) {
+    shake.timer -= dt;
+    shake.x = (Math.random()-0.5) * shake.intensity * 2;
+    shake.y = (Math.random()-0.5) * shake.intensity * 2;
+    shake.intensity *= 0.92;
+  } else { shake.x = 0; shake.y = 0; shake.intensity = 0; }
+}
+
+// ==================== PARTICLES ====================
+const MAX_PARTICLES = 200;
+let particles = [];
+function addParticle(x, y, color, life, vx, vy, size) {
+  if (particles.length >= MAX_PARTICLES) particles.splice(0, 20);
+  particles.push({ x, y, color, life, maxLife: life, vx: vx||((Math.random()-0.5)*2), vy: vy||(-(Math.random()*2+1)), size: size||2 });
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+function drawParticles() {
+  for (const p of particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x * SCALE - camera.x, p.y * SCALE - camera.y, p.size * SCALE, p.size * SCALE);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ==================== FLOATING TEXT ====================
+let floatingTexts = [];
+function addFloatText(x, y, text, color) {
+  // Limitar a 15 textos max na tela
+  if (floatingTexts.length > 15) floatingTexts.shift();
+  floatingTexts.push({ x: x*TILE, y: y*TILE, text, color, life: 1.2, maxLife: 1.2 });
+}
+function updateFloatTexts(dt) {
+  for (let i = floatingTexts.length-1; i >= 0; i--) {
+    const ft = floatingTexts[i];
+    ft.y -= 30*dt; // sobe mais rapido
+    ft.life -= dt;
+    // Forcar remocao apos tempo
+    if (ft.life <= 0 || (ft.maxLife - ft.life) > 2) {
+      floatingTexts.splice(i, 1);
+    }
+  }
+}
+function drawFloatTexts() {
+  ctx.font = 'bold 15px monospace'; ctx.textAlign = 'center';
+  for (const ft of floatingTexts) {
+    const alpha = Math.max(0, Math.min(1, ft.life / (ft.maxLife * 0.5)));
+    if (alpha <= 0) continue;
+    ctx.globalAlpha = alpha;
+    const sx = ft.x*SCALE - camera.x;
+    const sy = ft.y*SCALE - camera.y;
+    // Outline
+    ctx.fillStyle = '#000';
+    ctx.fillText(ft.text, sx+1, sy+1);
+    ctx.fillText(ft.text, sx-1, sy-1);
+    // Texto
+    ctx.fillStyle = ft.color;
+    ctx.fillText(ft.text, sx, sy);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ==================== TILE MAP SYSTEM ====================
+// Tile types: 0=void, 1=floor_stone, 2=floor_dark, 3=wall, 4=wall_top, 5=ore_iron, 6=ore_gold, 7=ore_crystal,
+// 8=bonfire, 9=chest, 10=door, 11=exit, 12=cursed_floor, 13=fire_floor, 14=boss_door, 15=npc_merchant,
+// 16=npc_upgrader, 17=ore_diamond, 18=water, 19=bridge, 20=pillar
+// 21=spike_trap, 22=lava, 23=grass, 24=rubble, 25=lore_tablet, 26=torch_wall
+const WALKABLE = new Set([1,2,5,6,7,8,9,10,11,12,13,14,15,16,17,19,21,23,24]);
+const MINABLE = new Set([5,6,7,17]);
+const DAMAGING = { 21: 3, 22: 8 }; // tile -> damage per second
+
+// Tile rendering coordinates from walls_floor.png (16x16 grid)
+const TILE_UV = {
+  1: { img:'wallsFloor', sx:48, sy:80, sw:16, sh:16 },   // stone floor
+  2: { img:'wallsFloor', sx:64, sy:80, sw:16, sh:16 },   // dark floor
+  3: { img:'wallsFloor', sx:0, sy:16, sw:16, sh:16 },     // wall face
+  4: { img:'wallsFloor', sx:0, sy:0, sw:16, sh:16 },      // wall top
+  5: { img:'objects', sx:112, sy:16, sw:16, sh:16 },       // ore iron (rock)
+  6: { img:'objects', sx:128, sy:16, sw:16, sh:16 },       // ore gold
+  7: { img:'objects', sx:144, sy:16, sw:16, sh:16 },       // ore crystal
+  8: { img:null, color:'#9a8060' },                         // bonfire (drawn specially)
+  9: { img:null, color:'#bbaa77' },                         // chest (drawn specially)
+  10: { img:'wallsFloor', sx:96, sy:64, sw:16, sh:16 },    // door
+  11: { img:null, color:'#556655' },    // exit (escada desenhada por drawExits)
+  12: { img:'wallsFloor', sx:64, sy:80, sw:16, sh:16, tint:'#552222' }, // cursed floor
+  13: { img:'wallsFloor', sx:48, sy:80, sw:16, sh:16, tint:'#553311' }, // fire floor
+  14: { img:'wallsFloor', sx:48, sy:16, sw:16, sh:16 },    // boss door
+  15: { img:null, color:'#559955' },                        // npc merchant spot
+  16: { img:null, color:'#555599' },                        // npc upgrader spot
+  17: { img:'objects', sx:160, sy:16, sw:16, sh:16 },      // diamond ore
+  18: { img:null, color:'#446688' },                        // water
+  19: { img:null, color:'#aa9977' },                        // bridge
+  20: { img:'wallsFloor', sx:16, sy:16, sw:16, sh:16 },    // pillar
+  21: { img:null, color:'#555566' },                        // spike trap
+  22: { img:null, color:'#cc4400' },                        // lava
+  23: { img:null, color:'#445533' },                        // grass
+  24: { img:null, color:'#665555' },                        // rubble
+  25: { img:null, color:'#8888aa' },                        // lore tablet
+  26: { img:'wallsFloor', sx:32, sy:16, sw:16, sh:16 },    // torch wall
+};
+
+// ==================== STORY / OBJECTIVE SYSTEM ====================
+const visitedMaps = new Set();
+const AREA_STORIES = {
+  tutorial: null,
+  ashWastes: [
+    'The Ash Wastes... once a thriving city of thousands.',
+    'When the God departed, the sky itself caught fire.',
+    'Citizens perished in hours. Only dust and bone remain.',
+    'A merchant and a smith cling to survival near the old gate.',
+    'The Ash Guardian patrols the ruins, mad with purpose.',
+    'The first fragment of Neutral Matter pulses somewhere within.',
+  ],
+  boneCaverns: [
+    'The Bone Caverns... a mass grave of fallen heroes.',
+    'Hundreds came before you. Knights, scholars, desperate souls.',
+    'Their bones do not rest. The curse animates them endlessly.',
+    'Aldric, once a great commander, became the Bone Lord.',
+    'He guards the second fragment - a duty he chose in life,',
+    'and cannot abandon in death.',
+  ],
+  cursedGrounds: [
+    'The Cursed Grounds reek of poison and decay.',
+    'Maren, a priest, tried to purify these lands. The curse took him instead.',
+    'His twisted form now guards the fragment he sought to protect.',
+    'Islands of stubborn grass resist - signs of a world fighting to survive.',
+    'The water is black. The soil writhes. Even the air stings.',
+    'Watch every step. The ground is deadlier than the monsters.',
+  ],
+  fireDepths: [
+    'The Fire Depths... the bleeding core of a broken world.',
+    'When the balance shattered, the earth split open.',
+    'Lava rose and swallowed entire kingdoms overnight.',
+    'The Fire Elemental was born from this catastrophe - pure rage given form.',
+    'Rock platforms are all that remain. Islands in an ocean of fire.',
+    'The fourth fragment burns at the heart of the inferno.',
+  ],
+  shadowRuins: [
+    'The Shadow Ruins... the God\'s own temple, now forsaken.',
+    'Here the original Neutral Matter was forged - and here it shattered.',
+    'Veyra, the temple librarian, became the Specter to guard the knowledge.',
+    'The library still holds the God\'s final writings.',
+    'They say he left an apology. No one has lived to read it.',
+    'The penultimate fragment waits among the forbidden shelves.',
+  ],
+  dragonLair: [
+    'The Lair of Cindara, the Ash Dragon.',
+    'She was the God\'s most loyal creation - guardian of all life.',
+    'When he vanished, she waited. Years turned to centuries.',
+    'Loneliness became rage. Rage became fire. Fire consumed everything.',
+    'She does not want to fight. But she no longer remembers how to stop.',
+    'This is the final battle. End her suffering.',
+  ],
+};
+
+function getCurrentObjective() {
+  if (!player.tutorialDone) return 'Complete the tutorial';
+  if (!player.killedBosses.has('ashWastes')) return 'Defeat the Guardian in the Ash Wastes';
+  if (!player.killedBosses.has('boneCaverns')) return 'Find the Bone Lord in the Caverns';
+  if (!player.killedBosses.has('cursedGrounds')) return 'Cross the Cursed Grounds';
+  if (!player.killedBosses.has('fireDepths')) return 'Survive the Fire Depths';
+  if (!player.killedBosses.has('shadowRuins')) return 'Conquer the Shadow Ruins';
+  if (player.matterCount >= 5 && !player.killedBosses.has('dragonLair')) return 'Face the Ash Dragon!';
+  return 'Collect more Neutral Matter (' + player.matterCount + '/9)';
+}
+
+const AREA_ORDER = ['tutorial','ashWastes','boneCaverns','cursedGrounds','fireDepths','shadowRuins','dragonLair'];
+
+const PATH_HINTS = {
+  'tutorial>ashWastes': 'The path opens into scorched earth... the Ash Wastes await.',
+  'ashWastes>tutorial': 'The sanctuary lies behind you. Turn back only if you must.',
+  'ashWastes>boneCaverns': 'The ground descends into darkness... bones crunch underfoot.',
+  'boneCaverns>ashWastes': 'Faint light filters from above. The wastes lie beyond.',
+  'boneCaverns>cursedGrounds': 'A foul wind rises from below. The air stings your lungs.',
+  'cursedGrounds>boneCaverns': 'The air clears as you climb toward the caverns.',
+  'cursedGrounds>fireDepths': 'Unbearable heat radiates from the passage ahead...',
+  'fireDepths>cursedGrounds': 'The temperature drops. Poisoned air replaces the flames.',
+  'fireDepths>shadowRuins': 'Ancient stonework appears through the smoke... a temple.',
+  'shadowRuins>fireDepths': 'The flames grow brighter as you descend from the ruins.',
+  'shadowRuins>dragonLair': 'The walls tremble. A deep growl echoes through the stone...',
+  'dragonLair>shadowRuins': 'The growling fades. The ruins offer brief respite.',
+};
+
+function getObjectiveArrowTarget() {
+  if (!player.tutorialDone || !showObjectiveArrow) return null;
+  const map = maps[player.currentMap];
+  if (!map) return null;
+
+  // 1. Blue arrow to upgrader if player has unclaimed matter
+  if (player.matterCount > player.weaponLevel && player.weapon) {
+    for (const n of npcs) {
+      if (n.type === 'upgrader') return { x: n.x, y: n.y, color: '#4488ff' };
+    }
+  }
+
+  // 2. Orange arrow to bonfire if player hasn't rested in this map
+  if (player.lastBonfire.map !== player.currentMap) {
+    for (const bf of bonfires) {
+      if (Math.hypot(player.x - bf.x, player.y - bf.y) > 3) {
+        return { x: bf.x, y: bf.y, color: '#ff8844' };
+      }
+    }
+  }
+
+  // 3. Green arrow to forward exit if boss is killed in this area
+  if (player.killedBosses.has(player.currentMap)) {
+    const curIdx = AREA_ORDER.indexOf(player.currentMap);
+    const nextMap = curIdx >= 0 && curIdx < AREA_ORDER.length - 1 ? AREA_ORDER[curIdx + 1] : null;
+    if (nextMap) {
+      for (const ex of activeExits) {
+        if (ex.target === nextMap) return { x: ex.x, y: ex.y, color: '#44ff44' };
+      }
+    }
+  }
+
+  // 4. Red arrow to boss door if boss alive and <=3 enemies remain
+  if (!player.killedBosses.has(player.currentMap) && enemies.length <= 3 && map._bossDoorX >= 0) {
+    return { x: map._bossDoorX, y: map._bossDoorY, color: '#ff4444' };
+  }
+
+  return null;
+}
+
+// Story intro state
+let storyIntroTimer = 0;
+let storyIntroLines = [];
+let storyIntroActive = false;
+
+// ==================== MAP GENERATION HELPER ====================
+function mapGen(w, h) {
+  const t = new Array(w * h).fill(0);
+  const me = {
+    t,
+    set(x, y, v) { if (x >= 0 && x < w && y >= 0 && y < h) t[y * w + x] = v; },
+    get(x, y) { return (x >= 0 && x < w && y >= 0 && y < h) ? t[y * w + x] : 0; },
+    fill(x1, y1, x2, y2, v) {
+      for (let y = Math.max(0,y1); y <= Math.min(h-1,y2); y++)
+        for (let x = Math.max(0,x1); x <= Math.min(w-1,x2); x++) me.set(x, y, v);
+    },
+    room(x1, y1, x2, y2, floor, wall) {
+      me.fill(x1, y1, x2, y2, floor || 2);
+      for (let x = x1; x <= x2; x++) { me.set(x, y1, wall || 4); me.set(x, y2, wall || 3); }
+      for (let y = y1; y <= y2; y++) { me.set(x1, y, wall || 3); me.set(x2, y, wall || 3); }
+    },
+    corridor(x1, y1, x2, y2, floor) {
+      me.fill(Math.min(x1,x2), Math.min(y1,y2), Math.max(x1,x2), Math.max(y1,y2), floor || 2);
+    },
+    pillars(x1, y1, x2, y2, spacingX, spacingY) {
+      for (let y = y1; y <= y2; y += spacingY || 4)
+        for (let x = x1; x <= x2; x += spacingX || 4)
+          if (me.get(x,y) === 2 || me.get(x,y) === 1) me.set(x, y, 20);
+    },
+    scatter(x1, y1, x2, y2, tile, chance) {
+      for (let y = y1; y <= y2; y++)
+        for (let x = x1; x <= x2; x++) {
+          const cur = me.get(x, y);
+          if ((cur === 2 || cur === 1 || cur === 12 || cur === 13) && Math.random() < chance) me.set(x, y, tile);
+        }
+    },
+    border(wall) {
+      for (let x = 0; x < w; x++) { me.set(x, 0, wall || 4); me.set(x, h-1, wall || 3); }
+      for (let y = 0; y < h; y++) { me.set(0, y, wall || 3); me.set(w-1, y, wall || 3); }
+    },
+  };
+  return me;
+}
+
+// ==================== MAP DATA ====================
+const maps = {};
+
+// Tutorial Cave (30x22) - Larger with multiple rooms
+maps.tutorial = (function(){
+  const m = mapGen(30, 22);
+  // Border
+  m.border(4);
+  m.fill(1,1,28,20,3); // all walls
+  // Entry room (south) - player spawns here
+  m.room(8,13,21,20,2,3);
+  m.fill(9,14,20,19,2);
+  // Bonfire in entry room
+  m.set(15,17,8);
+  // Upper treasure room (BEFORE corridor so corridor overwrites room wall)
+  m.room(6,2,23,8,2,3);
+  m.fill(7,3,22,7,2);
+  // Corridor north (AFTER room so it opens the wall at y=8)
+  m.corridor(13,8,16,13,2);
+  // Chest (weapon choice)
+  m.set(15,4,9);
+  // Ore alcoves left and right
+  m.fill(8,5,9,6,2); m.set(8,5,5); m.set(9,6,5);
+  m.fill(20,5,21,6,2); m.set(20,5,6); m.set(21,6,5);
+  // Rubble decorations
+  m.set(10,4,24); m.set(19,4,24); m.set(11,7,24); m.set(18,7,24);
+  // Torches on WALLS (not on walkable path) to guide the player
+  m.set(12,13,26); m.set(17,13,26); // corridor entrance torches (on outer walls)
+  m.set(12,10,26); m.set(17,10,26); // mid-corridor torches (on outer walls)
+  m.set(12,8,26); m.set(17,8,26);   // corridor top torches (on outer walls)
+  m.set(8,3,26); m.set(22,3,26);    // treasure room torches
+  m.set(13,4,26); m.set(17,4,26);   // near chest torches (not blocking path)
+  m.set(9,17,26); m.set(20,17,26);  // entry room torches
+  // Side alcove west (combat training)
+  m.room(2,9,7,16,2,3); m.fill(3,10,6,15,2);
+  m.corridor(7,12,8,12,2);
+  m.set(7,11,26); // west alcove torch
+  // Side alcove east
+  m.room(22,9,27,16,2,3); m.fill(23,10,26,15,2);
+  m.corridor(21,12,22,12,2);
+  m.set(22,11,26); // east alcove torch
+  // Exit at bottom
+  m.set(15,20,11);
+  return {
+    width:30, height:22, name:'Tutorial Cave',
+    startX:15, startY:18, tiles:m.t,
+    enemies:[],
+    exits:[{x:15, y:20, target:'ashWastes', tx:32, ty:5}],
+    bonfires:[{x:15, y:17}],
+    chests:[{x:15, y:4, item:'weapon_choice'}],
+    npcs:[], lights:[
+      {x:15,y:17,r:6,color:'#ff8833'},   // bonfire
+      {x:15,y:13,r:4,color:'#ff9944'},    // corridor entrance
+      {x:15,y:10,r:4,color:'#ff9944'},    // mid corridor
+      {x:15,y:4,r:5,color:'#ffcc44'},     // chest glow
+      {x:15,y:20,r:4,color:'#44ff66'},    // exit glow
+      {x:5,y:12,r:4,color:'#ff7744'},     // west alcove
+    ],
+  };
+})();
+
+// Ash Wastes (65x50) - Large open area with multiple zones
+maps.ashWastes = (function(){
+  const W=65,H=50, m=mapGen(W,H);
+  m.border(3);
+  m.fill(1,1,W-2,H-2,2); // floor
+  // Entry from tutorial (top)
+  m.fill(30,1,34,1,2); m.set(32,1,11);
+  // === Entry Plaza ===
+  m.room(25,2,39,10,2,3); m.fill(26,3,38,9,2);
+  m.set(32,5,8); // bonfire
+  m.set(28,4,24); m.set(36,4,24); // rubble
+  m.set(30,8,25); // lore tablet
+  // === Merchant Quarter (west) ===
+  m.room(3,5,18,18,2,3); m.fill(4,6,17,17,2);
+  m.corridor(18,10,25,10,2); // connect to entry
+  m.set(8,10,15); // merchant tile placeholder
+  m.set(6,8,5); m.set(14,8,5); m.set(10,7,5); // iron ore
+  m.set(6,15,6); m.set(14,15,6); // gold ore
+  m.pillars(6,8,15,16,4,4);
+  m.set(5,12,24); m.set(16,12,24);
+  // === Upgrader Forge (east) ===
+  m.room(43,5,61,18,2,3); m.fill(44,6,60,17,2);
+  m.corridor(39,10,43,10,2); // connect to entry
+  m.set(52,10,16); // upgrader tile placeholder
+  m.fill(48,14,56,16,22); // lava pool
+  m.fill(49,15,55,15,2); // bridge over lava
+  m.set(46,8,7); m.set(58,8,7); // crystal ore
+  m.set(52,7,6); // gold ore
+  m.set(50,12,24); m.set(54,12,24);
+  // === Central Open Field ===
+  m.fill(10,20,54,35,2);
+  m.corridor(15,17,15,20,2); // connect merchant
+  m.corridor(50,17,50,20,2); // connect forge
+  m.corridor(32,10,32,20,2); // connect entry
+  // Spike trap gauntlet
+  m.set(20,25,21); m.set(22,27,21); m.set(24,25,21);
+  m.set(40,25,21); m.set(42,27,21); m.set(44,25,21);
+  // Combat arena pillars
+  m.pillars(18,22,46,34,4,3);
+  m.set(25,30,24); m.set(39,30,24);
+  // === Mining Area (southwest) ===
+  m.room(3,25,14,40,2,3); m.fill(4,26,13,39,2);
+  m.corridor(14,30,18,30,2);
+  m.set(6,28,5); m.set(10,28,5); m.set(6,32,5); m.set(10,32,5);
+  m.set(8,35,6); m.set(6,37,7); m.set(10,37,17); // diamond!
+  // === Boss Corridor (south) ===
+  m.room(22,37,42,48,2,3); m.fill(23,38,41,47,2);
+  m.corridor(30,35,34,37,2);
+  m.set(32,40,21); m.set(28,42,21); m.set(36,42,21); // traps
+  m.pillars(26,40,38,46,4,3);
+  m.set(32,47,14); // boss door
+  m.set(32,39,25); // lore tablet
+  // Exit south
+  m.fill(31,48,33,48,2); m.set(32,48,11);
+  // Scatter some grass
+  m.scatter(10,20,54,35,23,0.05);
+  return {
+    width:W, height:H, name:'Ash Wastes',
+    startX:32, startY:3, tiles:m.t,
+    enemies:[
+      {type:'skeleton',x:28,y:8},{type:'skeleton',x:36,y:8},
+      {type:'skeleton',x:12,y:10},{type:'skeleton',x:8,y:14},
+      {type:'skeleton',x:50,y:8},{type:'skeleton',x:56,y:14},
+      {type:'skeleton',x:20,y:24},{type:'skeleton',x:44,y:24},
+      {type:'skeleton',x:30,y:28},{type:'skeleton',x:34,y:28},
+      {type:'skull',x:25,y:32},{type:'skull',x:39,y:32},
+      {type:'skeleton',x:8,y:30},{type:'skeleton',x:10,y:34},
+      {type:'vampire',x:32,y:44},{type:'skeleton',x:28,y:44},{type:'skeleton',x:36,y:44},
+    ],
+    exits:[
+      {x:32,y:1,target:'tutorial',tx:15,ty:19},
+      {x:32,y:48,target:'boneCaverns',tx:27,ty:5},
+    ],
+    bonfires:[{x:32,y:5}],
+    chests:[{x:5,y:7,item:'flask'},{x:59,y:7,item:'flask'},{x:13,y:38,item:'flask'}],
+    npcs:[
+      {x:8,y:10,type:'merchant',name:'Ash Traveler'},
+      {x:52,y:10,type:'upgrader',name:'Shadow Smith'},
+    ],
+    lights:[{x:32,y:5,r:7,color:'#ff8833'},{x:8,y:10,r:4,color:'#ffaa55'},{x:52,y:10,r:5,color:'#ff6622'}],
+  };
+})();
+
+// Bone Caverns (55x40) - Dark cave network
+maps.boneCaverns = (function(){
+  const W=55,H=40,m=mapGen(W,H);
+  m.border(4);
+  m.fill(1,1,W-2,H-2,3); // all walls (cave)
+  // Entry chamber (top)
+  m.room(22,2,32,9,1,4); m.fill(23,3,31,8,1);
+  m.set(27,1,11); // entry
+  m.set(27,5,8); // bonfire
+  m.set(25,4,24); m.set(29,4,24);
+  // West corridor + rooms
+  m.corridor(10,7,22,8,1);
+  m.room(3,5,12,14,1,4); m.fill(4,6,11,13,1);
+  m.set(6,8,5); m.set(9,8,5); m.set(6,11,5); // iron ore
+  m.set(4,7,25); // lore tablet
+  // East corridor + rooms
+  m.corridor(32,7,44,8,1);
+  m.room(42,5,52,14,1,4); m.fill(43,6,51,13,1);
+  m.set(46,8,6); m.set(49,8,6); // gold ore
+  m.set(46,12,7); // crystal
+  m.pillars(44,7,50,12,3,3);
+  // Central passage down
+  m.corridor(26,9,28,20,1);
+  // Large cavern (center)
+  m.room(15,18,39,32,1,4); m.fill(16,19,38,31,1);
+  m.set(27,22,8); // second bonfire
+  m.pillars(18,20,36,30,4,4);
+  // Water pools (decorative - using cave floor variant)
+  m.fill(20,24,24,27,1); m.fill(30,24,34,27,1);
+  // West wing
+  m.room(3,20,13,30,1,4); m.fill(4,21,12,29,1);
+  m.corridor(13,25,15,25,1);
+  m.set(6,24,6); m.set(10,24,7); m.set(8,27,5);
+  m.set(5,22,25); // lore
+  // East wing
+  m.room(41,20,52,30,1,4); m.fill(42,21,51,29,1);
+  m.corridor(39,25,41,25,1);
+  m.set(45,24,7); m.set(49,24,17); // diamond!
+  m.set(47,27,6);
+  // Boss path (south)
+  m.corridor(26,32,28,36,1);
+  m.room(20,35,34,38,1,4); m.fill(21,36,33,37,1);
+  m.set(24,37,21); m.set(27,36,21); m.set(30,37,21); // spike traps
+  m.set(27,38,14); // boss door
+  m.fill(26,38,28,38,1); m.set(27,38,11); // exit
+  return {
+    width:W, height:H, name:'Bone Caverns',
+    startX:27, startY:4, tiles:m.t,
+    enemies:[
+      {type:'skull',x:7,y:9},{type:'skull',x:10,y:12},
+      {type:'skull',x:46,y:10},{type:'skull',x:49,y:10},
+      {type:'skeleton',x:20,y:22},{type:'skeleton',x:34,y:22},
+      {type:'skeleton',x:22,y:28},{type:'skeleton',x:32,y:28},
+      {type:'vampire',x:27,y:26},{type:'skull',x:25,y:30},{type:'skull',x:29,y:30},
+      {type:'skull',x:7,y:24},{type:'skull',x:10,y:27},
+      {type:'vampire',x:46,y:24},{type:'vampire',x:49,y:27},
+      {type:'skeleton',x:25,y:36},{type:'skeleton',x:29,y:36},
+    ],
+    exits:[
+      {x:27,y:1,target:'ashWastes',tx:32,ty:46},
+      {x:27,y:38,target:'cursedGrounds',tx:25,ty:5},
+    ],
+    bonfires:[{x:27,y:5},{x:27,y:22}],
+    chests:[{x:11,y:12,item:'flask'},{x:43,y:12,item:'flask'},{x:51,y:28,item:'key'}],
+    npcs:[],
+    lights:[{x:27,y:5,r:6,color:'#ff8833'},{x:27,y:22,r:6,color:'#ff8833'},{x:6,y:8,r:3,color:'#aa6633'}],
+  };
+})();
+
+// Cursed Grounds (50x40) - Poison swamps and cursed ruins
+maps.cursedGrounds = (function(){
+  const W=50,H=40,m=mapGen(W,H);
+  m.border(3);
+  m.fill(1,1,W-2,H-2,12); // cursed ground floor
+  // Entry (top)
+  m.fill(24,1,26,1,12); m.set(25,1,11);
+  // Entry safe zone
+  m.room(18,2,32,10,12,3); m.fill(19,3,31,9,12);
+  m.set(25,5,8); // bonfire
+  m.set(22,4,25); // lore tablet
+  m.set(28,4,24); m.set(20,8,24);
+  // === Poison Swamp West (spike traps = toxic) ===
+  m.fill(3,3,15,18,12);
+  m.corridor(15,7,18,7,12);
+  // Safe islands in swamp
+  m.fill(5,6,8,9,23); // grass safe
+  m.fill(10,10,13,13,23); // grass safe
+  m.set(6,7,5); m.set(12,11,5); // iron ore on safe spots
+  // Spike traps as poison puddles
+  m.set(4,5,21); m.set(9,7,21); m.set(7,12,21); m.set(14,8,21);
+  m.set(3,10,21); m.set(11,15,21); m.set(6,16,21);
+  // === Merchant Encampment (east) ===
+  m.room(35,3,47,15,12,3); m.fill(36,4,46,14,2);
+  m.corridor(32,7,35,7,12);
+  m.set(40,8,15); // merchant placeholder
+  m.set(44,8,16); // upgrader placeholder
+  m.set(38,12,8); // bonfire
+  m.set(42,5,25); // lore
+  m.set(37,6,24); m.set(45,6,24);
+  // === Ore Grove (west-south) ===
+  m.room(3,22,16,34,12,3); m.fill(4,23,15,33,23); // grassy area
+  m.corridor(10,18,10,22,12);
+  m.set(6,26,6); m.set(12,26,6); m.set(9,29,7); m.set(6,31,7);
+  m.set(12,31,17); // diamond!
+  m.scatter(4,23,15,33,24,0.04);
+  // === Central Ruins ===
+  m.fill(18,14,32,28,12);
+  m.room(20,16,30,26,2,3); m.fill(21,17,29,25,2);
+  m.pillars(22,18,28,24,3,3);
+  m.set(25,20,25); // lore tablet in center
+  m.set(23,22,21); m.set(27,22,21); // spike traps
+  // === Side Caves (east-south) ===
+  m.room(35,20,47,34,1,3); m.fill(36,21,46,33,1);
+  m.corridor(32,25,35,25,12);
+  m.set(40,25,7); m.set(44,28,6);
+  m.set(38,30,21); m.set(42,30,21);
+  // === Boss Area (south) ===
+  m.room(18,30,32,38,12,3); m.fill(19,31,31,37,12);
+  m.corridor(25,28,25,30,12);
+  m.set(22,34,21); m.set(25,33,21); m.set(28,34,21);
+  m.set(25,37,14); // boss door
+  m.set(25,38,11); // exit
+  return {
+    width:W, height:H, name:'Cursed Grounds',
+    startX:25, startY:4, tiles:m.t,
+    enemies:[
+      {type:'vampire',x:6,y:8},{type:'vampire',x:12,y:12},
+      {type:'skull',x:22,y:18},{type:'skull',x:28,y:18},
+      {type:'vampire',x:24,y:24},{type:'vampire',x:26,y:24},
+      {type:'skull',x:22,y:22},{type:'skull',x:28,y:22},
+      {type:'vampire',x:8,y:26},{type:'vampire',x:13,y:30},
+      {type:'skull',x:40,y:24},{type:'skull',x:44,y:30},
+      {type:'vampire',x:23,y:35},{type:'vampire',x:27,y:35},
+      {type:'skull',x:25,y:32},
+    ],
+    exits:[
+      {x:25,y:1,target:'boneCaverns',tx:27,ty:36},
+      {x:25,y:38,target:'fireDepths',tx:22,ty:5},
+    ],
+    bonfires:[{x:25,y:5},{x:38,y:12}],
+    chests:[{x:7,y:7,item:'flask'},{x:46,y:13,item:'flask'},{x:14,y:32,item:'key'}],
+    npcs:[
+      {x:40,y:8,type:'merchant',name:'Cursed Healer'},
+      {x:44,y:8,type:'upgrader',name:'Corrupted Forger'},
+    ],
+    lights:[{x:25,y:5,r:5,color:'#ff4422'},{x:38,y:12,r:5,color:'#ff8833'},{x:25,y:20,r:4,color:'#884422'}],
+  };
+})();
+
+// Fire Depths (45x35) - Lava rivers and fire platforms
+maps.fireDepths = (function(){
+  const W=45,H=35,m=mapGen(W,H);
+  m.border(4);
+  m.fill(1,1,W-2,H-2,22); // lava everywhere!
+  // Entry platform (top)
+  m.fill(18,2,26,8,13); // fire floor
+  m.set(22,1,11); // entry
+  m.set(22,4,8); // bonfire
+  m.set(20,3,24); m.set(24,3,24);
+  m.set(20,7,25); // lore tablet
+  // Left platform
+  m.fill(3,4,14,14,13);
+  m.set(6,7,6); m.set(11,7,6); m.set(8,10,7); // ores
+  m.set(5,12,5); m.set(12,12,5);
+  m.pillars(5,6,12,12,4,3);
+  // Bridge to left
+  m.fill(14,6,18,7,13); // bridge
+  // Right platform
+  m.fill(30,4,42,14,13);
+  m.set(34,7,7); m.set(38,7,7); m.set(36,10,17); // diamond!
+  m.set(32,12,6); m.set(40,12,6);
+  m.pillars(32,6,40,12,4,3);
+  // Bridge to right
+  m.fill(26,6,30,7,13); // bridge
+  // Middle section
+  m.fill(10,16,34,22,13);
+  m.fill(16,14,28,16,13); // corridor down from entry
+  m.set(22,18,8); // second bonfire
+  m.set(16,18,21); m.set(28,18,21); // spike traps
+  m.set(14,20,21); m.set(30,20,21);
+  m.pillars(14,17,30,21,4,4);
+  m.set(12,19,25); // lore
+  // Bridges to middle from sides
+  m.fill(5,14,10,15,13);
+  m.fill(34,14,40,15,13);
+  // Bottom area - boss approach
+  m.fill(14,22,30,30,13);
+  m.corridor(20,22,24,22,13);
+  m.set(18,26,21); m.set(22,25,21); m.set(26,26,21);
+  m.set(20,28,21); m.set(24,28,21);
+  m.set(22,30,14); // boss door
+  // Exit
+  m.fill(21,32,23,33,13);
+  m.set(22,33,11);
+  // Lava edges glow
+  return {
+    width:W, height:H, name:'Fire Depths',
+    startX:22, startY:3, tiles:m.t,
+    enemies:[
+      {type:'skull',x:7,y:8},{type:'skull',x:11,y:11},
+      {type:'skull',x:34,y:8},{type:'skull',x:39,y:11},
+      {type:'vampire',x:18,y:19},{type:'vampire',x:26,y:19},
+      {type:'skull',x:22,y:20},{type:'vampire',x:14,y:18},
+      {type:'vampire',x:30,y:18},
+      {type:'skull',x:18,y:27},{type:'skull',x:26,y:27},
+      {type:'vampire',x:22,y:28},
+    ],
+    exits:[
+      {x:22,y:1,target:'cursedGrounds',tx:25,ty:36},
+      {x:22,y:33,target:'shadowRuins',tx:22,ty:5},
+    ],
+    bonfires:[{x:22,y:4},{x:22,y:18}],
+    chests:[{x:4,y:5,item:'flask'},{x:41,y:5,item:'flask'}],
+    npcs:[],
+    lights:[{x:22,y:4,r:5,color:'#ff6600'},{x:22,y:18,r:5,color:'#ff6600'},{x:8,y:8,r:4,color:'#ff3300'},{x:36,y:8,r:4,color:'#ff3300'}],
+  };
+})();
+
+// Shadow Ruins (45x35) - Ancient ruined halls with secrets
+maps.shadowRuins = (function(){
+  const W=45,H=35,m=mapGen(W,H);
+  m.border(4);
+  m.fill(1,1,W-2,H-2,3); // walls
+  // Entry hall
+  m.room(16,2,28,9,1,4); m.fill(17,3,27,8,1);
+  m.set(22,1,11); // entry
+  m.set(22,5,8); // bonfire
+  m.set(19,4,24); m.set(25,4,24);
+  m.set(20,7,25); // lore
+  // Grand corridor
+  m.corridor(20,9,24,18,1);
+  m.pillars(21,10,23,17,2,2);
+  // West library
+  m.room(3,8,14,20,1,4); m.fill(4,9,13,19,1);
+  m.corridor(14,13,20,13,1);
+  m.set(6,11,25); m.set(10,11,25); // lore tablets
+  m.set(6,15,25); m.set(10,15,25); // more lore
+  m.set(8,17,7); // crystal
+  m.pillars(5,10,12,18,4,4);
+  // East armory
+  m.room(30,8,42,20,1,4); m.fill(31,9,41,19,1);
+  m.corridor(24,13,30,13,1);
+  m.set(34,11,6); m.set(38,11,6); // gold ore
+  m.set(36,14,7); m.set(34,17,7); m.set(38,17,17); // diamond!
+  m.set(40,10,25); // lore
+  m.pillars(33,10,40,18,4,4);
+  // Central sanctum
+  m.room(12,20,32,30,1,4); m.fill(13,21,31,29,1);
+  m.set(22,24,8); // bonfire
+  m.pillars(15,22,29,28,4,3);
+  // Spike gauntlet
+  m.set(16,23,21); m.set(28,23,21);
+  m.set(18,26,21); m.set(26,26,21);
+  m.set(20,28,21); m.set(24,28,21);
+  m.set(22,22,25); // central lore
+  // Boss approach (south)
+  m.corridor(20,30,24,32,1);
+  m.set(22,33,14); // boss door
+  m.fill(21,33,23,33,1); m.set(22,33,11); // exit
+  return {
+    width:W, height:H, name:'Shadow Ruins',
+    startX:22, startY:4, tiles:m.t,
+    enemies:[
+      {type:'vampire',x:19,y:6},{type:'vampire',x:25,y:6},
+      {type:'vampire',x:6,y:12},{type:'vampire',x:11,y:16},
+      {type:'vampire',x:35,y:12},{type:'vampire',x:39,y:16},
+      {type:'skull',x:21,y:14},{type:'skull',x:23,y:14},
+      {type:'skull',x:16,y:24},{type:'skull',x:28,y:24},
+      {type:'vampire',x:20,y:27},{type:'vampire',x:24,y:27},
+      {type:'skull',x:22,y:26},
+    ],
+    exits:[
+      {x:22,y:1,target:'fireDepths',tx:22,ty:31},
+      {x:22,y:33,target:'dragonLair',tx:17,ty:7},
+    ],
+    bonfires:[{x:22,y:5},{x:22,y:24}],
+    chests:[{x:4,y:10,item:'flask'},{x:41,y:18,item:'flask'}],
+    npcs:[],
+    lights:[{x:22,y:5,r:5,color:'#8844ff'},{x:22,y:24,r:5,color:'#8844ff'},{x:8,y:14,r:3,color:'#6633aa'},{x:36,y:14,r:3,color:'#6633aa'}],
+  };
+})();
+
+// Dragon's Lair (35x28) - Grand arena for final boss
+maps.dragonLair = (function(){
+  const W=35,H=28,m=mapGen(W,H);
+  m.border(4);
+  m.fill(1,1,W-2,H-2,3); // walls
+  // Entry vestibule
+  m.room(12,2,22,8,2,4); m.fill(13,3,21,7,2);
+  m.set(17,1,11); // entry
+  m.set(17,4,8); // bonfire
+  m.set(15,6,25); m.set(19,6,25); // lore tablets
+  // Grand arena
+  m.room(4,10,30,26,2,4); m.fill(5,11,29,25,2);
+  m.corridor(16,8,18,10,2);
+  // Pillars around arena
+  m.pillars(8,13,26,23,6,5);
+  // Lava edges
+  m.fill(5,11,7,12,22); m.fill(27,11,29,12,22);
+  m.fill(5,24,7,25,22); m.fill(27,24,29,25,22);
+  // Spike traps in arena
+  m.set(12,16,21); m.set(22,16,21);
+  m.set(10,20,21); m.set(24,20,21);
+  m.set(17,22,21);
+  // Central lore
+  m.set(17,14,25);
+  // Rubble
+  m.set(9,12,24); m.set(25,12,24); m.set(9,24,24); m.set(25,24,24);
+  return {
+    width:W, height:H, name:'Dragon Lair',
+    startX:17, startY:4, tiles:m.t,
+    enemies:[],
+    exits:[{x:17,y:1,target:'shadowRuins',tx:22,ty:31}],
+    bonfires:[{x:17,y:4}],
+    chests:[],
+    npcs:[],
+    lights:[{x:17,y:4,r:5,color:'#ff4400'},{x:17,y:18,r:10,color:'#ff2200'},{x:6,y:12,r:3,color:'#ff4400'},{x:28,y:12,r:3,color:'#ff4400'}],
+  };
+})();
+
+// Boss data
+const BOSS_DATA = {
+  ashWastes: { name:'Ash Guardian', hp:150, dmg:8, speed:1.2, color:'#888866', size:2, matterIndex:0, sprite:'skeleton' },
+  boneCaverns: { name:'Bone Lord', hp:200, dmg:12, speed:1.0, color:'#ccbb99', size:2, matterIndex:1, sprite:'skull' },
+  cursedGrounds: { name:'Cursed Abomination', hp:250, dmg:15, speed:1.4, color:'#882244', size:2, matterIndex:2, sprite:'vampire' },
+  fireDepths: { name:'Fire Elemental', hp:300, dmg:18, speed:1.5, color:'#ff6622', size:2, matterIndex:3, sprite:'priest' },
+  shadowRuins: { name:'Ruin Specter', hp:350, dmg:20, speed:1.3, color:'#6644aa', size:2, matterIndex:4, sprite:'skull2' },
+  dragonLair: { name:'Ash Dragon', hp:800, dmg:30, speed:1.0, color:'#cc2211', size:3, matterIndex:-1, isFinal:true, sprite:'vampire2' },
+};
+
+// ==================== PLAYER ====================
+const player = {
+  x: 15, y: 18, vx: 0, vy: 0, speed: 3.5,
+  facing: 0, // 0=down,1=up,2=left,3=right
+  hp: 50, maxHp: 50, stamina: 40, maxStamina: 40,
+  ashes: 0, level: 1,
+  stats: { vitality: 5, strength: 3, dexterity: 3, resistance: 2 },
+  weapon: null, // 'sword' or 'axe'
+  hasPickaxe: false,
+  inventory: [],
+  matterPieces: [false,false,false,false,false,false,false,false,false],
+  matterCount: 0,
+  weaponLevel: 0,
+  attacking: false, attackTimer: 0, attackCooldown: 0,
+  mining: false, mineTimer: 0,
+  invincible: 0,
+  animFrame: 0, animTimer: 0,
+  currentMap: 'tutorial',
+  dead: false,
+  lastBonfire: { map:'tutorial', x:15, y:17 },
+  killedBosses: new Set(),
+  openedChests: new Set(),
+  staminaRegen: 0,
+  walkFrame: 0,
+  exitCooldown: 0, // impede loop entre saidas
+  // Dodge / Roll
+  dodging: false, dodgeTimer: 0, dodgeCooldown: 0,
+  dodgeDx: 0, dodgeDy: 0,
+  // Tutorial
+  tutorialStep: 0, tutorialDone: false,
+};
+
+function getPlayerDamage() {
+  const base = 5 + player.stats.strength * 2 + player.weaponLevel * 5;
+  // Critical hit: dexterity increases crit chance (5% + 2% per dex)
+  const critChance = 0.05 + player.stats.dexterity * 0.02;
+  if (Math.random() < critChance) {
+    player._lastCrit = true;
+    return Math.floor(base * 1.8);
+  }
+  player._lastCrit = false;
+  return base;
+}
+function getPlayerDefense() {
+  return player.stats.resistance * 1.5;
+}
+function getAttackSpeed() {
+  return Math.max(0.15, 0.4 - player.stats.dexterity * 0.02);
+}
+
+// ==================== ENTITIES ====================
+let enemies = [];
+let items = [];
+let bosses = [];
+let npcs = [];
+let bonfires = [];
+let chests = [];
+let activeExits = [];
+
+const ENEMY_TYPES = {
+  skeleton: { hp:20, dmg:5, speed:1.2, color:'#bbaa88', xp:10, drop:'ore_iron' },
+  skull:    { hp:30, dmg:8, speed:1.5, color:'#aabb99', xp:15, drop:'ore_gold' },
+  vampire:  { hp:45, dmg:12, speed:1.8, color:'#8855aa', xp:25, drop:'ore_crystal' },
+};
+
+// Area difficulty scaling
+const AREA_SCALE = { tutorial:1, ashWastes:1, boneCaverns:1.3, cursedGrounds:1.6, fireDepths:2.0, shadowRuins:2.5, dragonLair:3.0 };
+
+function spawnEnemy(type, x, y) {
+  const def = ENEMY_TYPES[type];
+  const scale = AREA_SCALE[player.currentMap] || 1;
+  const hp = Math.floor(def.hp * scale);
+  const dmg = Math.floor(def.dmg * scale);
+  const xp = Math.floor(def.xp * scale);
+  enemies.push({
+    type, x, y, hp, maxHp: hp, dmg, speed: def.speed * (1 + (scale-1)*0.15),
+    color: def.color, xp, drop: def.drop,
+    vx:0, vy:0, state:'idle', stateTimer:Math.random()*3,
+    animFrame:0, animTimer:0, hitTimer:0, facing:0,
+    aggro: false, aggroRange: 6,
+  });
+}
+
+function spawnBoss(mapName) {
+  const bd = BOSS_DATA[mapName];
+  if (!bd || player.killedBosses.has(mapName)) return;
+  const map = maps[mapName];
+  // Find boss door position and spawn boss near it
+  let cx = Math.floor(map.width/2), cy = Math.floor(map.height/2);
+  for (let ty2 = 0; ty2 < map.height; ty2++) {
+    for (let tx2 = 0; tx2 < map.width; tx2++) {
+      if (map.tiles[ty2 * map.width + tx2] === 14) {
+        cx = tx2; cy = ty2 - 4; // spawn a few tiles above boss door
+      }
+    }
+  }
+  bosses.push({
+    name: bd.name, x: cx, y: cy, hp: bd.hp, maxHp: bd.hp, dmg: bd.dmg,
+    speed: bd.speed, color: bd.color, size: bd.size, matterIndex: bd.matterIndex,
+    isFinal: bd.isFinal||false, mapName, sprite: bd.sprite||'skeleton',
+    vx:0, vy:0, state:'idle', stateTimer:2, attackTimer:0,
+    phase:0, animFrame:0, animTimer:0, hitTimer:0, facing:0,
+    chargeTimer:0, charging:false, specialTimer:5,
+  });
+}
+
+// ==================== LOAD MAP ====================
+function loadMap(mapName, px, py) {
+  const map = maps[mapName];
+  if (!map) return;
+  player.currentMap = mapName;
+  player.x = px !== undefined ? px : map.startX;
+  player.y = py !== undefined ? py : map.startY;
+  enemies = []; items = []; bosses = []; npcs = []; bonfires = []; chests = []; activeExits = [];
+  particles = []; floatingTexts = [];
+
+  // Spawn enemies (nao spawna no tutorial - sao adicionados pelo sistema de tutorial)
+  if (mapName !== 'tutorial') {
+    for (const e of map.enemies) spawnEnemy(e.type, e.x, e.y);
+  }
+
+  // Spawn bonfires
+  for (const b of map.bonfires) bonfires.push({ x:b.x, y:b.y, lit:true });
+
+  // Spawn chests
+  for (const c of map.chests) {
+    const key = mapName+'_'+c.x+'_'+c.y;
+    chests.push({ x:c.x, y:c.y, item:c.item, opened: player.openedChests.has(key), key });
+  }
+
+  // Spawn NPCs
+  for (const n of map.npcs) npcs.push({ x:n.x, y:n.y, type:n.type, name:n.name, animFrame:0, animTimer:0 });
+
+  // Exits
+  for (const e of map.exits) activeExits.push(e);
+
+  // Boss (only spawns if area has boss door and boss not killed)
+  if (BOSS_DATA[mapName] && !player.killedBosses.has(mapName)) {
+    // Boss spawns when player approaches boss area
+  }
+
+  // Cache boss door position
+  map._bossDoorX = -1; map._bossDoorY = -1;
+  for (let ty2 = 0; ty2 < map.height; ty2++) {
+    for (let tx2 = 0; tx2 < map.width; tx2++) {
+      if (map.tiles[ty2 * map.width + tx2] === 14) {
+        map._bossDoorX = tx2; map._bossDoorY = ty2;
+      }
+    }
+  }
+
+  // Story intro on first visit
+  if (AREA_STORIES[mapName] && !visitedMaps.has(mapName)) {
+    visitedMaps.add(mapName);
+    storyIntroLines = AREA_STORIES[mapName];
+    storyIntroTimer = 5.0;
+    storyIntroActive = true;
+  }
+}
+
+// ==================== COLLISION ====================
+function getTile(map, x, y) {
+  if (x < 0 || y < 0 || x >= map.width || y >= map.height) return 0;
+  return map.tiles[y * map.width + x];
+}
+
+function canWalk(map, x, y) {
+  const tx = Math.floor(x), ty = Math.floor(y);
+  const tile = getTile(map, tx, ty);
+  return WALKABLE.has(tile);
+}
+
+function rectCollide(ax,ay,aw,ah,bx,by,bw,bh) {
+  return ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
+}
+
+// ==================== UPDATE PLAYER ====================
+function updatePlayer(dt) {
+  if (player.dead) return;
+  const map = maps[player.currentMap];
+
+  // ---- DODGE / ROLL ----
+  if (player.dodgeCooldown > 0) player.dodgeCooldown -= dt;
+  if (player.dodging) {
+    player.dodgeTimer -= dt;
+    const dspd = 10 * dt;
+    const nx2 = player.x + player.dodgeDx * dspd;
+    const ny2 = player.y + player.dodgeDy * dspd;
+    if (canWalk(map, nx2+0.2, ny2+0.2) && canWalk(map, nx2+0.8, ny2+0.8)) {
+      player.x = nx2; player.y = ny2;
+    }
+    player.invincible = 0.1; // invencivel durante esquiva
+    for(let i=0;i<2;i++) addParticle(player.x*TILE+8, player.y*TILE+8, '#aaaaff', 0.2, (Math.random()-0.5)*2, (Math.random()-0.5)*2, 1);
+    if (player.dodgeTimer <= 0) player.dodging = false;
+    return; // nao faz nada durante dodge
+  }
+
+  // Movement
+  let dx = 0, dy = 0;
+  if (keys['w']||keys['arrowup']) dy=-1;
+  if (keys['s']||keys['arrowdown']) dy=1;
+  if (keys['a']||keys['arrowleft']) dx=-1;
+  if (keys['d']||keys['arrowright']) dx=1;
+
+  if (dx!==0&&dy!==0) { dx*=0.707; dy*=0.707; }
+
+  if (dx!==0||dy!==0) {
+    if (dy<0) player.facing=1;
+    else if (dy>0) player.facing=0;
+    if (dx<0) player.facing=2;
+    else if (dx>0) player.facing=3;
+    player.walkFrame += dt * 8;
+  }
+
+  // Iniciar Dodge (Shift)
+  if (keys['shift'] && player.dodgeCooldown <= 0 && player.stamina >= 10) {
+    keys['shift'] = false;
+    player.dodging = true;
+    player.dodgeTimer = 0.2;
+    player.dodgeCooldown = 0.6;
+    player.stamina -= 10;
+    // Direcao do dodge: usa input ou facing
+    if (dx!==0||dy!==0) {
+      player.dodgeDx = dx; player.dodgeDy = dy;
+    } else {
+      player.dodgeDx = player.facing===3?1:player.facing===2?-1:0;
+      player.dodgeDy = player.facing===0?1:player.facing===1?-1:0;
+    }
+    return;
+  }
+
+  const spd = player.speed * dt;
+  const nx = player.x + dx * spd;
+  const ny = player.y + dy * spd;
+
+  if (canWalk(map, nx+0.2, player.y+0.2) && canWalk(map, nx+0.8, player.y+0.2) &&
+      canWalk(map, nx+0.2, player.y+0.8) && canWalk(map, nx+0.8, player.y+0.8)) player.x = nx;
+  if (canWalk(map, player.x+0.2, ny+0.2) && canWalk(map, player.x+0.8, ny+0.2) &&
+      canWalk(map, player.x+0.2, ny+0.8) && canWalk(map, player.x+0.8, ny+0.8)) player.y = ny;
+
+  // Hazard damage (spike traps, lava)
+  const playerTileX = Math.floor(player.x + 0.5), playerTileY = Math.floor(player.y + 0.5);
+  const currentTile = getTile(map, playerTileX, playerTileY);
+  if (DAMAGING[currentTile] && player.invincible <= 0) {
+    const hazardDmg = DAMAGING[currentTile] * dt;
+    player.hp -= hazardDmg;
+    if (Math.random() < 0.3) addParticle(player.x*TILE+8, player.y*TILE+8, currentTile===22?'#ff4400':'#aaaaaa', 0.3);
+    if (player.hp <= 0) {
+      player.hp = 0; player.dead = true;
+      gameState = STATE.GAME_OVER;
+      return;
+    }
+  }
+
+  // Attack
+  player.attackCooldown -= dt;
+  if (player.attackCooldown < 0) player.attackCooldown = 0;
+
+  if ((mouse.clicked || keys[' ']) && player.weapon && player.attackCooldown <= 0 && player.stamina >= 5) {
+    player.attacking = true;
+    player.attackTimer = 0.2;
+    player.attackCooldown = getAttackSpeed();
+    player.stamina -= 5;
+
+    // Determine attack direction
+    const atkX = player.x + (player.facing===3?1.2:player.facing===2?-0.8:0.2);
+    const atkY = player.y + (player.facing===0?1.2:player.facing===1?-0.8:0.2);
+
+    // Check enemy hits
+    for (const e of enemies) {
+      const dist = Math.hypot(e.x-atkX, e.y-atkY);
+      if (dist < 1.5) {
+        const dmg = Math.max(1, getPlayerDamage());
+        e.hp -= dmg;
+        e.hitTimer = 0.2;
+        e.vx = (e.x-player.x)*3; e.vy = (e.y-player.y)*3;
+        addFloatText(e.x, e.y, player._lastCrit ? 'CRIT -'+dmg+'!' : '-'+dmg, player._lastCrit ? '#ffff00' : '#ff4444');
+        addShake(player._lastCrit ? 6 : 3, player._lastCrit ? 0.15 : 0.1);
+        const hitCol = player._lastCrit ? '#ffff00' : '#ff4444';
+        for(let i=0;i<(player._lastCrit?8:5);i++) addParticle(e.x*TILE+8, e.y*TILE+8, hitCol, 0.5);
+      }
+    }
+    // Check boss hits
+    for (const b of bosses) {
+      const dist = Math.hypot(b.x-atkX, b.y-atkY);
+      if (dist < 2) {
+        const dmg = Math.max(1, getPlayerDamage());
+        b.hp -= dmg;
+        b.hitTimer = 0.2;
+        addFloatText(b.x, b.y, '-'+dmg, '#ffaa00');
+        addShake(4, 0.12);
+        for(let i=0;i<8;i++) addParticle(b.x*TILE+8, b.y*TILE+8, '#ffaa00', 0.5);
+      }
+    }
+
+    // Slash particles
+    const sx = player.x*TILE+8+(player.facing===3?16:player.facing===2?-16:0);
+    const sy = player.y*TILE+8+(player.facing===0?16:player.facing===1?-16:0);
+    for(let i=0;i<6;i++) addParticle(sx, sy, '#ffffff', 0.3, (Math.random()-0.5)*4, (Math.random()-0.5)*4, 1);
+  }
+  if (player.attackTimer > 0) player.attackTimer -= dt;
+  else player.attacking = false;
+
+  // Mining
+  if (keys['e'] && player.hasPickaxe && !player.mining) {
+    const fx = Math.floor(player.x + (player.facing===3?1:player.facing===2?-1:0));
+    const fy = Math.floor(player.y + (player.facing===0?1:player.facing===1?-1:0));
+    const tile = getTile(map, fx, fy);
+    if (MINABLE.has(tile)) {
+      player.mining = true;
+      player.mineTimer = 1.0;
+      player.mineTarget = { x:fx, y:fy, tile };
+    }
+  }
+  if (player.mining) {
+    player.mineTimer -= dt;
+    const mt = player.mineTarget;
+    addParticle(mt.x*TILE+8, mt.y*TILE+8, '#aaaaaa', 0.3, (Math.random()-0.5)*3, (Math.random()-0.5)*3, 1);
+    if (player.mineTimer <= 0) {
+      player.mining = false;
+      map.tiles[mt.y * map.width + mt.x] = (getTile(map, mt.x, mt.y) === 12) ? 12 : (getTile(map,mt.x,mt.y)===13?13:2);
+      // Drop ore
+      const oreNames = { 5:'Iron Ore', 6:'Gold Ore', 7:'Crystal', 17:'Diamond' };
+      const oreValues = { 5:5, 6:15, 7:30, 17:60 };
+      const oreName = oreNames[mt.tile]||'Ore';
+      const oreVal = oreValues[mt.tile]||5;
+      items.push({ x:mt.x, y:mt.y, name:oreName, type:'ore', value:oreVal, animTimer:0 });
+      addFloatText(mt.x, mt.y, oreName, '#ffcc00');
+    }
+  }
+
+  // Interact (F key)
+  if (keys['f']) {
+    keys['f'] = false;
+    // Bonfire
+    for (const b of bonfires) {
+      if (Math.hypot(b.x-player.x, b.y-player.y) < 1.5) {
+        player.hp = player.maxHp; player.stamina = player.maxStamina;
+        player.lastBonfire = { map:player.currentMap, x:b.x, y:b.y };
+        gameState = STATE.BONFIRE; bonfireMenu = 0;
+        return;
+      }
+    }
+    // Chest
+    for (const c of chests) {
+      if (!c.opened && Math.hypot(c.x-player.x, c.y-player.y) < 1.5) {
+        if (c.item === 'weapon_choice') {
+          c.opened = true;
+          player.openedChests.add(c.key);
+          gameState = STATE.WEAPON_CHOICE;
+          return;
+        }
+        const _c = c;
+        showMathChallenge(() => {
+          _c.opened = true;
+          player.openedChests.add(_c.key);
+          if (_c.item === 'flask') {
+            player.inventory.push({ name:'Life Flask', type:'flask', value:20 });
+            showDialog('Found a Life Flask! Press Q to heal quickly.');
+          } else if (_c.item === 'key') {
+            player.inventory.push({ name:'Ancient Key', type:'key', value:50 });
+            showDialog('Found an Ancient Key! You can sell it for many ashes.');
+          } else if (_c.item === 'ashes50') {
+            player.ashes += 50;
+            showDialog('Found 50 hidden Ashes!');
+            addFloatText(player.x, player.y, '+50 Ashes', '#ffaa44');
+          } else if (_c.item === 'flask2') {
+            player.inventory.push({ name:'Life Flask', type:'flask', value:20 });
+            player.inventory.push({ name:'Life Flask', type:'flask', value:20 });
+            showDialog('Found 2 Life Flasks!');
+          }
+        });
+        return;
+      }
+    }
+    // NPC
+    for (const n of npcs) {
+      if (Math.hypot(n.x-player.x, n.y-player.y) < 2) {
+        if (n.type === 'merchant') {
+          // Context-sensitive greeting tied to world lore
+          const bossCount = player.killedBosses.size;
+          if (bossCount === 0) showDialog('I am Elara. My husband turned to ash the day the God left. I sell what remains of our life... perhaps it will help you survive longer than he did.');
+          else if (bossCount === 1) showDialog('You killed the Guardian? That stone golem protected our city gates for centuries. Now it can rest. I have better wares for you - things my husband forged before the end.');
+          else if (bossCount < 4) showDialog('Word spreads even through ashes. ' + bossCount + ' guardians fallen. Each one was someone once, you know. But the fragments must be gathered. Browse my wares.');
+          else if (bossCount < 6) showDialog('I can feel it... the ashes are lighter. The land remembers what it was. You carry so much divine power now. Take what you need - gold means nothing if the world heals.');
+          else showDialog('Cindara awaits you. The dragon... she used to fly over our city. The children would wave. She would roar softly back. Please... be gentle with her.');
+          gameState = STATE.SHOP; shopPage = 0; return;
+        }
+        if (n.type === 'upgrader') {
+          if (player.matterCount > player.weaponLevel && player.weapon) {
+            player.weaponLevel++;
+            player.matterCount--;
+            gameState = STATE.CUTSCENE; cutsceneTimer = 4;
+            showDialog('The Neutral Matter sings as it fuses with your weapon... Level ' + player.weaponLevel + '! Each fragment carries a piece of the God\'s will. Can you feel it?');
+          } else if (!player.weapon) {
+            showDialog('You carry no weapon, yet you seek the divine forge? Return when you have something to channel the Matter through. Even the God needed a vessel.');
+          } else if (player.matterCount === 0) {
+            showDialog('The fragments are scattered across the land, each guarded by a soul who could not let go. Defeat them - free them - and bring the Matter to me.');
+          } else {
+            showDialog('Your weapon hums with all the Matter it can hold. The remaining fragments await deeper in the world. Each guardian you face was once a protector, like you.');
+          }
+          return;
+        }
+      }
+    }
+    // Lore tablet
+    const faceDx = player.facing===3?1:player.facing===2?-1:0;
+    const faceDy = player.facing===0?1:player.facing===1?-1:0;
+    const loreTx = Math.floor(player.x + faceDx);
+    const loreTy = Math.floor(player.y + faceDy);
+    if (getTile(map, loreTx, loreTy) === 25) {
+      // Multiple lore texts per area, cycled by position
+      const lorePool = {
+        tutorial: [
+          'These ruins were a sanctuary before the divine abandonment...',
+          'Someone wrote here: "When the god departs, the ashes shall come."',
+          '"The God created nine fragments. Nine souls of creation. Lose even one, and balance fails."',
+          'A child\'s drawing on the wall: a tall figure leaving, a dragon weeping behind him.',
+        ],
+        ashWastes: [
+          'Ashes cover everything... Neutral Matter fragmented into nine pieces when the god departed.',
+          '"The Ash Guardian was born from the rage of the abandoned land. It protects the fragment."',
+          'Claw marks on the stones. The divine creature passed through here, devouring everything.',
+          '"I am Elara, merchant. My husband became ash before my eyes. I sell what remains of our life."',
+          '"The Guardian was once a stone golem, built to protect the city gates. Now it protects nothing."',
+        ],
+        boneCaverns: [
+          'The bones of ancient warriors still guard these caverns. They failed to stop the creature.',
+          '"The Bone Lord was a hero. The curse turned him into what guards these depths."',
+          'Hundreds of adventurers lie here. Their bones move on their own in the darkness.',
+          '"Commander Aldric led the last stand against the dragon. He fell here, still holding his shield."',
+          '"His daughter waits at the surface. She has waited for thirty years. She will wait forever."',
+        ],
+        cursedGrounds: [
+          'The curse corrupts the land. The divine creature absorbed the power of these lands.',
+          '"Do not drink the water. Do not touch the plants. The land is poisoned to its soul."',
+          'The Cursed Abomination was a priest who tried to purify the land. The poison consumed him.',
+          '"Father Maren prayed for seven days. On the eighth, the curse answered his prayers instead."',
+          '"The grass that survives here is sacred. It remembers what the world was. It refuses to die."',
+        ],
+        fireDepths: [
+          'The eternal fire burns since the god departed. They say a piece of Matter lies in the flames.',
+          '"The Elemental was born from the molten core of the world. It is pure fire and fury."',
+          'The lava rose when the balance shattered. These platforms are all that remains.',
+          '"A kingdom of dwarves lived beneath these rocks. The lava took them in a single night."',
+          '"The Elemental screams not in rage, but in agony. It cannot stop burning. It never asked to exist."',
+        ],
+        shadowRuins: [
+          'These ruins were the main temple. Here the god forged the original Neutral Matter.',
+          '"The library holds secrets of past ages. The Specter guards the forbidden knowledge."',
+          'Inscriptions describe the creation of Neutral Matter: nine fragments of pure divine power.',
+          '"He who gathers the nine fragments may forge the weapon that slays gods."',
+          'A note in the God\'s own handwriting: "I am sorry. I was not strong enough to watch them suffer."',
+          '"Veyra chose to stay when the temple fell. Knowledge, she said, must never die. So neither did she."',
+        ],
+        dragonLair: [
+          'The Ash Dragon... the divine creature that devours all. Only the divine weapon can stop it.',
+          '"It was the guardian of this world. When the god departed, loneliness drove it mad."',
+          'The last record says: "Do not blame it. It weeps as it burns everything."',
+          '"Her name is Cindara. The God named her after the first sunrise. She was his favorite creation."',
+          '"She waited at the gate for a thousand years. He never came back. The fire started on year one."',
+        ],
+      };
+      const pool = lorePool[player.currentMap] || ['Ancient inscriptions cover the stone...'];
+      const loreIdx = (loreTx * 7 + loreTy * 13) % pool.length;
+      showDialog(pool[loreIdx]);
+      return;
+    }
+    // Use flask
+    const flaskIdx = player.inventory.findIndex(i => i.type === 'flask');
+    if (flaskIdx >= 0 && player.hp < player.maxHp) {
+      player.hp = Math.min(player.maxHp, player.hp + 20 + player.stats.vitality * 2);
+      player.inventory.splice(flaskIdx, 1);
+      addFloatText(player.x, player.y, '+Health', '#44ff44');
+    }
+  }
+
+  // Pick up items
+  for (let i = items.length-1; i >= 0; i--) {
+    const item = items[i];
+    if (Math.hypot(item.x-player.x, item.y-player.y) < 1) {
+      if (item.type === 'ore') {
+        player.inventory.push(item);
+        addFloatText(player.x, player.y, '+'+item.name, '#ffcc00');
+      } else if (item.type === 'ashes') {
+        player.ashes += item.value;
+        addFloatText(player.x, player.y, '+'+item.value+' Ashes', '#ffaa44');
+      } else if (item.type === 'matter') {
+        player.matterPieces[item.matterIndex] = true;
+        player.matterCount++;
+        // Inicia cutscene da materia neutra
+        matterCutsceneTimer = 5.0;
+        matterCutsceneIndex = item.matterIndex;
+        gameState = STATE.MATTER_CUTSCENE;
+      }
+      items.splice(i, 1);
+    }
+  }
+
+  // Check exits
+  if (player.exitCooldown > 0) { player.exitCooldown -= dt; }
+  else {
+    for (const ex of activeExits) {
+      if (Math.abs(player.x - ex.x) < 1.0 && Math.abs(player.y - ex.y) < 1.0) {
+        player.exitCooldown = 1.5;
+        const _ex = ex;
+        showMathChallenge(() => { loadMap(_ex.target, _ex.tx, _ex.ty); }, _ex.target);
+        return;
+      }
+    }
+  }
+
+  // Path hints near exits
+  for (const ex of activeExits) {
+    const exDist = Math.hypot(player.x - ex.x, player.y - ex.y);
+    if (exDist < 5 && exDist > 1.5) {
+      const hintKey = player.currentMap + '>' + ex.target;
+      if (PATH_HINTS[hintKey]) {
+        pathHintText = PATH_HINTS[hintKey];
+        pathHintTimer = 2.0;
+      }
+      break;
+    }
+  }
+
+  // Quick flask use (Q key)
+  if (keys['q']) {
+    keys['q'] = false;
+    const qi = player.inventory.findIndex(i => i.type === 'flask');
+    if (qi >= 0 && player.hp < player.maxHp) {
+      const healAmt = 20 + player.stats.vitality * 2;
+      player.hp = Math.min(player.maxHp, player.hp + healAmt);
+      player.inventory.splice(qi, 1);
+      addFloatText(player.x, player.y, '+' + healAmt + ' HP', '#44ff44');
+      for(let i=0;i<6;i++) addParticle(player.x*TILE+8, player.y*TILE+8, '#44ff44', 0.5, (Math.random()-0.5)*3, -Math.random()*3, 1);
+    }
+  }
+
+  // Stamina regen
+  player.staminaRegen += dt;
+  if (player.staminaRegen > 0.5) {
+    player.staminaRegen = 0;
+    player.stamina = Math.min(player.maxStamina, player.stamina + 2);
+  }
+
+  // Invincibility
+  if (player.invincible > 0) player.invincible -= dt;
+
+  // Animation
+  player.animTimer += dt;
+  if (player.animTimer > 0.15) { player.animTimer = 0; player.animFrame = (player.animFrame+1)%4; }
+}
+
+// ==================== UPDATE ENEMIES ====================
+function updateEnemies(dt) {
+  const map = maps[player.currentMap];
+  for (let i = enemies.length-1; i >= 0; i--) {
+    const e = enemies[i];
+    // Hit flash
+    if (e.hitTimer > 0) e.hitTimer -= dt;
+    // Knockback
+    if (Math.abs(e.vx)>0.1||Math.abs(e.vy)>0.1) {
+      e.x += e.vx*dt; e.y += e.vy*dt;
+      e.vx *= 0.9; e.vy *= 0.9;
+    }
+
+    // Death
+    if (e.hp <= 0) {
+      // Drop ashes
+      items.push({ x:e.x, y:e.y, type:'ashes', value:e.xp, name:'Ashes', animTimer:0 });
+      // Chance to drop ore
+      if (Math.random() < 0.35) {
+        const oreVal = e.drop==='ore_iron'?5:e.drop==='ore_gold'?15:30;
+        const oreName = e.drop==='ore_iron'?'Iron Ore':e.drop==='ore_gold'?'Gold Ore':'Crystal';
+        items.push({ x:e.x+0.3, y:e.y, type:'ore', value:oreVal, name:oreName, animTimer:0 });
+      }
+      // Vampires have a chance to drop flask
+      if (e.type === 'vampire' && Math.random() < 0.15) {
+        items.push({ x:e.x-0.3, y:e.y, name:'Life Flask', type:'flask', value:20, animTimer:0 });
+      }
+      for(let j=0;j<10;j++) addParticle(e.x*TILE+8, e.y*TILE+8, e.color, 0.8);
+      enemies.splice(i, 1);
+      continue;
+    }
+
+    // AI
+    const distToPlayer = Math.hypot(e.x-player.x, e.y-player.y);
+    e.stateTimer -= dt;
+
+    if (distToPlayer < e.aggroRange && !player.dead) {
+      e.aggro = true;
+      const dx = player.x - e.x, dy = player.y - e.y;
+      const len = Math.hypot(dx, dy);
+
+      // Type-specific AI behaviors
+      if (e.type === 'skull' && len > 2 && len < 5) {
+        // Skulls circle the player, harder to hit
+        const circAngle = Math.atan2(dy, dx) + Math.PI/2 + Math.sin(Date.now()/800+e.x)*0.5;
+        const mx = Math.cos(circAngle) * e.speed * dt;
+        const my = Math.sin(circAngle) * e.speed * dt;
+        if (canWalk(map, e.x+mx+0.2, e.y+0.2)&&canWalk(map, e.x+mx+0.8, e.y+0.8)) e.x += mx;
+        if (canWalk(map, e.x+0.2, e.y+my+0.2)&&canWalk(map, e.x+0.8, e.y+my+0.8)) e.y += my;
+      } else if (e.type === 'vampire' && e.hp < e.maxHp * 0.4 && len < 3) {
+        // Vampires retreat when low HP
+        if (len > 0.3) {
+          const mx = -(dx/len) * e.speed * dt * 1.3;
+          const my = -(dy/len) * e.speed * dt * 1.3;
+          if (canWalk(map, e.x+mx+0.2, e.y+0.2)&&canWalk(map, e.x+mx+0.8, e.y+0.8)) e.x += mx;
+          if (canWalk(map, e.x+0.2, e.y+my+0.2)&&canWalk(map, e.x+0.8, e.y+my+0.8)) e.y += my;
+        }
+      } else if (len > 0.8) {
+        // Default: chase player
+        const mx = (dx/len) * e.speed * dt;
+        const my = (dy/len) * e.speed * dt;
+        if (canWalk(map, e.x+mx+0.2, e.y+0.2)&&canWalk(map, e.x+mx+0.8, e.y+0.8)) e.x += mx;
+        if (canWalk(map, e.x+0.2, e.y+my+0.2)&&canWalk(map, e.x+0.8, e.y+my+0.8)) e.y += my;
+      }
+
+      // Attack player
+      if (distToPlayer < 1.0 && e.stateTimer <= 0 && player.invincible <= 0) {
+        const dmg = Math.max(1, e.dmg - getPlayerDefense());
+        player.hp -= dmg;
+        player.invincible = 0.5;
+        addFloatText(player.x, player.y, '-'+dmg, '#ff0000');
+        addShake(5, 0.15);
+        for(let j=0;j<4;j++) addParticle(player.x*TILE+8, player.y*TILE+8, '#ff0000', 0.4);
+        e.stateTimer = 0.8;
+        if (player.hp <= 0) playerDeath();
+      }
+    } else {
+      // Wander
+      if (e.stateTimer <= 0) {
+        e.stateTimer = 2 + Math.random()*3;
+        e.vx = (Math.random()-0.5)*0.5; e.vy = (Math.random()-0.5)*0.5;
+      }
+      const wx = e.x + e.vx*dt*0.5, wy = e.y + e.vy*dt*0.5;
+      if (canWalk(map, wx+0.3, wy+0.3)&&canWalk(map, wx+0.7, wy+0.7)) { e.x = wx; e.y = wy; }
+    }
+
+    // Facing
+    if (player.x > e.x) e.facing = 3; else e.facing = 2;
+
+    // Animation
+    e.animTimer += dt;
+    if (e.animTimer > 0.2) { e.animTimer = 0; e.animFrame = (e.animFrame+1)%4; }
+  }
+}
+
+// ==================== UPDATE BOSSES ====================
+function updateBosses(dt) {
+  const map = maps[player.currentMap];
+  for (let i = bosses.length-1; i >= 0; i--) {
+    const b = bosses[i];
+    if (b.hitTimer > 0) b.hitTimer -= dt;
+
+    // Death
+    if (b.hp <= 0) {
+      player.killedBosses.add(b.mapName);
+      const ashReward = 100 + (b.isFinal ? 500 : player.killedBosses.size * 30);
+      player.ashes += ashReward;
+      addFloatText(b.x, b.y, '+'+ashReward+' Ashes', '#ffff00');
+      addShake(12, 0.4);
+      for(let j=0;j<30;j++) addParticle(b.x*TILE+8, b.y*TILE+8, b.color, 1.5, (Math.random()-0.5)*6, (Math.random()-0.5)*6, 3);
+      // Drop matter
+      if (b.matterIndex >= 0) {
+        items.push({ x:b.x, y:b.y, type:'matter', matterIndex:b.matterIndex, name:'Neutral Matter', animTimer:0 });
+      }
+      // Boss death dialogue
+      const bossDeathLines = {
+        ashWastes: 'The Ash Guardian crumbles to dust... "The city... I was supposed to protect the city. The people... are they safe?" Its stone eyes dim. It never learned they were already gone.',
+        boneCaverns: 'Commander Aldric, the Bone Lord, falls to his knees... "Tell my daughter... Aldric kept his promise. I never abandoned my post." His bones scatter gently, as if relieved.',
+        cursedGrounds: 'Father Maren\'s twisted form convulses... "The land... I can feel it healing already. My prayers... they were answered after all." The poison drains from his eyes. He smiles.',
+        fireDepths: 'The Fire Elemental flickers and dims... "The burning... it stops? I can think again. I never wanted to hurt anyone. I just... couldn\'t stop." The flames go quiet.',
+        shadowRuins: 'Veyra, the Specter, releases the forbidden tomes... "The library is yours now. Read the God\'s apology. He... truly loved this world. As did I." She fades into the pages she protected.',
+        dragonLair: 'Cindara, the Ash Dragon, lowers her great head... "You smell like him. Like the God. I waited so long..." Her fire dies. "Tell him... I forgive him. I was never angry. Just lonely."',
+      };
+      if (bossDeathLines[b.mapName]) {
+        setTimeout(() => showDialog(bossDeathLines[b.mapName]), 500);
+      }
+      if (b.isFinal) {
+        setTimeout(() => { gameState = STATE.WIN; }, 3000);
+      }
+      bosses.splice(i, 1);
+      continue;
+    }
+
+    // Boss AI
+    const distToPlayer = Math.hypot(b.x-player.x, b.y-player.y);
+    b.animTimer += dt;
+    if (b.animTimer > 0.2) { b.animTimer = 0; b.animFrame = (b.animFrame+1)%4; }
+
+    // Phase change
+    if (b.hp < b.maxHp * 0.5 && b.phase === 0) { b.phase = 1; b.speed *= 1.3; b.dmg = Math.floor(b.dmg*1.2); }
+
+    // Movement: chase player
+    if (distToPlayer > 1.5) {
+      const dx = player.x-b.x, dy = player.y-b.y;
+      const len = Math.hypot(dx,dy);
+      const mx = (dx/len)*b.speed*dt, my = (dy/len)*b.speed*dt;
+      if (canWalk(map, b.x+mx, b.y)) b.x += mx;
+      if (canWalk(map, b.x, b.y+my)) b.y += my;
+    }
+
+    // Special attacks (varied per boss type)
+    b.specialTimer -= dt;
+    if (b.specialTimer <= 0 && !b.charging) {
+      b.specialTimer = b.phase === 1 ? 3 : 5;
+      const dx = player.x-b.x, dy = player.y-b.y;
+      const len = Math.hypot(dx,dy)||1;
+
+      if (b.isFinal) {
+        // Dragon: alternates charge and fire burst
+        if (Math.random() < 0.5) {
+          b.charging = true; b.chargeTimer = 0.6;
+          b.vx = (dx/len)*10; b.vy = (dy/len)*10;
+          addShake(6, 0.3);
+        } else {
+          // Fire burst: ring of particles
+          for(let j=0;j<16;j++) {
+            const a = j*Math.PI/8;
+            addParticle(b.x*TILE+8, b.y*TILE+8, '#ff4400', 0.8, Math.cos(a)*5, Math.sin(a)*5, 2);
+          }
+          addShake(4, 0.2);
+          // Damage nearby
+          if (distToPlayer < 3 && player.invincible <= 0) {
+            player.hp -= Math.max(1, Math.floor(b.dmg*0.5) - getPlayerDefense());
+            player.invincible = 0.5;
+            addFloatText(player.x, player.y, 'QUEIMADURA!', '#ff6600');
+          }
+        }
+      } else if (b.sprite === 'skull' || b.sprite === 'skull2') {
+        // Skulls: teleport behind player
+        const behindX = player.x + (player.facing===3?-2:player.facing===2?2:0);
+        const behindY = player.y + (player.facing===0?-2:player.facing===1?2:0);
+        if (canWalk(map, behindX+0.3, behindY+0.3)&&canWalk(map, behindX+0.7, behindY+0.7)) {
+          for(let j=0;j<8;j++) addParticle(b.x*TILE+8, b.y*TILE+8, '#aa66ff', 0.5);
+          b.x = behindX; b.y = behindY;
+          for(let j=0;j<8;j++) addParticle(b.x*TILE+8, b.y*TILE+8, '#aa66ff', 0.5);
+        }
+      } else {
+        // Default: charge attack
+        b.charging = true; b.chargeTimer = 0.5;
+        b.vx = (dx/len)*8; b.vy = (dy/len)*8;
+        addShake(4, 0.15);
+      }
+    }
+    if (b.charging) {
+      b.chargeTimer -= dt;
+      b.x += b.vx*dt; b.y += b.vy*dt;
+      for(let j=0;j<2;j++) addParticle(b.x*TILE+8, b.y*TILE+8, b.color, 0.3);
+      if (b.chargeTimer <= 0) { b.charging = false; b.vx=0; b.vy=0; }
+    }
+
+    // Attack player
+    b.attackTimer -= dt;
+    if (distToPlayer < 2 && b.attackTimer <= 0 && player.invincible <= 0) {
+      const dmg = Math.max(1, b.dmg - getPlayerDefense());
+      player.hp -= dmg;
+      player.invincible = 0.8;
+      addFloatText(player.x, player.y, '-'+dmg, '#ff0000');
+      addShake(8, 0.2);
+      for(let j=0;j<6;j++) addParticle(player.x*TILE+8, player.y*TILE+8, '#ff2200', 0.5);
+      b.attackTimer = 1.2;
+      if (player.hp <= 0) playerDeath();
+    }
+
+    // Facing
+    b.facing = player.x > b.x ? 3 : 2;
+  }
+
+  // Check if player near boss door area - spawn boss (uses cached position)
+  if (bosses.length === 0 && BOSS_DATA[player.currentMap] && !player.killedBosses.has(player.currentMap)) {
+    const map = maps[player.currentMap];
+    if (map._bossDoorX >= 0 && Math.hypot(player.x - map._bossDoorX, player.y - map._bossDoorY) < 6) {
+      const _mapName = player.currentMap;
+      showMathChallenge(() => {
+        spawnBoss(_mapName);
+        gameState = STATE.BOSS_INTRO;
+        stateTimer = 2;
+      });
+      return;
+    }
+  }
+}
+
+// ==================== PLAYER DEATH ====================
+function playerDeath() {
+  player.dead = true;
+  gameState = STATE.GAME_OVER;
+  stateTimer = 3;
+  for(let i=0;i<20;i++) addParticle(player.x*TILE+8, player.y*TILE+8, '#ff0000', 1.5);
+}
+
+function respawnPlayer() {
+  player.dead = false;
+  player.hp = player.maxHp;
+  player.stamina = player.maxStamina;
+  player.ashes = Math.floor(player.ashes * 0.7); // Lose 30% ashes on death
+  loadMap(player.lastBonfire.map, player.lastBonfire.x, player.lastBonfire.y);
+  gameState = (!player.tutorialDone && player.currentMap==='tutorial') ? STATE.TUTORIAL : STATE.GAMEPLAY;
+}
+
+// ==================== DIALOG ====================
+function showDialog(text, callback) {
+  dialogText = text;
+  dialogCallback = callback;
+  gameState = STATE.DIALOG;
+}
+
+// ==================== LEVELING ====================
+function getLevelCost(stat) {
+  return 20 + player.stats[stat] * 15;
+}
+function levelUp(stat) {
+  const cost = getLevelCost(stat);
+  if (player.ashes >= cost) {
+    player.ashes -= cost;
+    player.stats[stat]++;
+    player.level++;
+    // Recalculate max hp/stamina
+    player.maxHp = 30 + player.stats.vitality * 10;
+    player.maxStamina = 30 + player.stats.vitality * 5;
+    player.hp = player.maxHp;
+    player.stamina = player.maxStamina;
+    addFloatText(player.x, player.y, 'Level Up!', '#ffff00');
+  }
+}
+
+// ==================== MATH CHALLENGE SYSTEM ====================
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+function generateMathProblem(tier) {
+  let question, answer;
+  switch (tier) {
+    case 1: { // Soma/subtracao ate 100
+      const op = Math.random() < 0.5 ? '+' : '-';
+      if (op === '+') {
+        const a = randInt(1, 50), b = randInt(1, 50);
+        question = a + ' + ' + b; answer = a + b;
+      } else {
+        const a = randInt(20, 99), b = randInt(1, a);
+        question = a + ' - ' + b; answer = a - b;
+      }
+      break;
+    }
+    case 2: { // Tabuada 2-9
+      const a = randInt(2, 9), b = randInt(2, 9);
+      question = a + ' x ' + b; answer = a * b;
+      break;
+    }
+    case 3: { // Divisao exata + operacoes mistas
+      if (Math.random() < 0.5) {
+        const b = randInt(2, 9), ans = randInt(2, 12), a = b * ans;
+        question = a + ' / ' + b; answer = ans;
+      } else {
+        const a = randInt(5, 30), b = randInt(2, 9), c = randInt(1, 20);
+        const op = Math.random() < 0.5 ? '+' : '-';
+        if (op === '+') { question = a + ' x ' + b + ' + ' + c; answer = a * b + c; }
+        else { question = a + ' x ' + b + ' - ' + c; answer = a * b - c; }
+      }
+      break;
+    }
+    case 4: { // Fracoes simples (resposta inteira ou decimal simples)
+      const denom = [2, 4, 5, 10][randInt(0, 3)];
+      const mult = randInt(1, 5);
+      const numer = denom * mult + [0, denom / 2][randInt(0, 1)];
+      question = numer + ' / ' + denom;
+      answer = numer / denom;
+      break;
+    }
+    case 5: { // Porcentagens e decimais
+      const pcts = [10, 20, 25, 50, 75];
+      const pct = pcts[randInt(0, pcts.length - 1)];
+      const base = randInt(2, 20) * 10;
+      question = pct + '% of ' + base;
+      answer = pct * base / 100;
+      break;
+    }
+    case 6: { // Ordem das operacoes, potencias
+      if (Math.random() < 0.5) {
+        const a = randInt(2, 10), b = randInt(1, 5), c = randInt(1, 10);
+        question = a + ' + ' + b + ' x ' + c;
+        answer = a + b * c;
+      } else {
+        const base = randInt(2, 6), exp = randInt(2, 3);
+        question = base + '^' + exp;
+        answer = Math.pow(base, exp);
+      }
+      break;
+    }
+    case 7: { // Equacoes simples (resolver x)
+      const a = randInt(2, 9), b = randInt(1, 20), c = randInt(10, 50);
+      // a*x + b = c  =>  x = (c-b)/a, ensure integer answer
+      const xVal = randInt(1, 8);
+      const result = a * xVal + b;
+      question = a + 'x + ' + b + ' = ' + result + '  (x = ?)';
+      answer = xVal;
+      break;
+    }
+    default: {
+      const a = randInt(1, 20), b = randInt(1, 20);
+      question = a + ' + ' + b; answer = a + b;
+    }
+  }
+  return { question, answer, tierName: MATH_TIER_NAMES[tier] || 'Math' };
+}
+
+function showMathChallenge(callback, mapOverride) {
+  const area = mapOverride || player.currentMap;
+  const tier = MATH_TIER[area] || 1;
+  mathProblem = generateMathProblem(tier);
+  mathInput = '';
+  mathCallback = callback;
+  mathResult = null;
+  mathResultTimer = 0;
+  mathAttempts = 0;
+  mathInputBuffer = [];
+  mathPrevState = gameState;
+  gameState = STATE.MATH;
+}
+
+function updateMath() {
+  // Process buffered keys
+  for (const key of mathInputBuffer) {
+    if (mathResult === 'correct') continue; // ignore input during success display
+
+    if (mathResult === 'wrong') {
+      // After wrong answer, any key clears and retries
+      mathResult = null;
+      mathResultTimer = 0;
+      if (mathAttempts >= 3) {
+        mathProblem = generateMathProblem(MATH_TIER[player.currentMap] || 1);
+        mathAttempts = 0;
+      }
+      mathInput = '';
+      continue;
+    }
+
+    if (key === 'Escape') {
+      gameState = mathPrevState;
+      mathProblem = null;
+      mathCallback = null;
+      mathResult = null;
+      mathInputBuffer = [];
+      keys['escape'] = false;
+      keys['enter'] = false;
+      keys['f'] = false;
+      return;
+    }
+    if (key === 'Backspace') {
+      mathInput = mathInput.slice(0, -1);
+    } else if (key === 'Enter') {
+      if (mathInput.length > 0) {
+        const userAnswer = parseFloat(mathInput);
+        if (!isNaN(userAnswer) && Math.abs(userAnswer - mathProblem.answer) < 0.01) {
+          // Correct
+          mathResult = 'correct';
+          mathResultTimer = 0;
+          const tier = MATH_TIER[player.currentMap] || 1;
+          const bonus = 5 + tier * 3;
+          player.ashes += bonus;
+          addFloatText(player.x, player.y, '+' + bonus + ' Ashes (Math)', '#44ddff');
+        } else {
+          // Wrong
+          mathResult = 'wrong';
+          mathResultTimer = 1.5;
+          mathAttempts++;
+          const tier = MATH_TIER[player.currentMap] || 1;
+          const dmg = 3 + tier * 2;
+          player.hp -= dmg;
+          addFloatText(player.x, player.y, '-' + dmg + ' HP', '#ff4444');
+          if (player.hp <= 0) {
+            player.hp = 1; // Don't kill from math, leave at 1 HP
+          }
+        }
+      }
+    } else if ((key >= '0' && key <= '9') || key === '-' || key === '.' || key === ',') {
+      if (key === ',') mathInput += '.';
+      else if (mathInput.length < 10) mathInput += key;
+    }
+  }
+  mathInputBuffer = [];
+
+  // Handle result timers
+  if (mathResult === 'correct') {
+    mathResultTimer -= dt;
+    if (mathResultTimer <= 0) {
+      const cb = mathCallback;
+      gameState = mathPrevState;
+      mathProblem = null;
+      mathCallback = null;
+      mathResult = null;
+      // Clear all keys to prevent leaking into next state
+      keys['enter'] = false;
+      keys['escape'] = false;
+      keys['f'] = false;
+      if (cb) cb();
+    }
+  }
+}
+
+function drawMath() {
+  if (!mathProblem) return;
+  // Draw game behind
+  const map = maps[player.currentMap];
+  if (map) {
+    updateCamera(player, map.width, map.height);
+    drawMap(); drawExits(); drawBonfires(); drawItems(); drawChests(); drawNPCs();
+    drawEnemies(); drawBosses(); drawPlayer(); drawLighting(); drawHUD();
+  }
+
+  // Dark overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0, 0, CW, CH);
+
+  // Panel
+  const pw = 500, ph = 300;
+  const px = CW / 2 - pw / 2, py = CH / 2 - ph / 2;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(px + 4, py + 4, pw, ph);
+
+  // Parchment background
+  const parchGrad = ctx.createLinearGradient(px, py, px, py + ph);
+  parchGrad.addColorStop(0, '#2a2218');
+  parchGrad.addColorStop(0.5, '#1e1812');
+  parchGrad.addColorStop(1, '#2a2218');
+  ctx.fillStyle = parchGrad;
+  ctx.fillRect(px, py, pw, ph);
+
+  // Border - double line
+  ctx.strokeStyle = '#5a4a30'; ctx.lineWidth = 2;
+  ctx.strokeRect(px, py, pw, ph);
+  ctx.strokeStyle = '#3a2a18'; ctx.lineWidth = 1;
+  ctx.strokeRect(px + 4, py + 4, pw - 8, ph - 8);
+
+  // Corner ornaments
+  const corners = [[px, py], [px + pw, py], [px, py + ph], [px + pw, py + ph]];
+  ctx.fillStyle = '#6a5530';
+  for (const [cx, cy] of corners) {
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(Math.PI / 4);
+    ctx.fillRect(-5, -5, 10, 10);
+    ctx.restore();
+  }
+
+  ctx.textAlign = 'center';
+
+  // Tier title
+  ctx.fillStyle = '#aa8855'; ctx.font = 'bold 14px monospace';
+  ctx.fillText('MATH CHALLENGE', CW / 2, py + 35);
+  ctx.fillStyle = '#887755'; ctx.font = '12px monospace';
+  ctx.fillText(mathProblem.tierName, CW / 2, py + 55);
+
+  // Separator
+  ctx.fillStyle = '#3a2a15'; ctx.fillRect(CW / 2 - 100, py + 62, 200, 1);
+
+  // Question
+  ctx.fillStyle = '#eeddcc'; ctx.font = 'bold 28px monospace';
+  ctx.fillText(mathProblem.question, CW / 2, py + 110);
+
+  // Input field
+  const ifW = 200, ifH = 40;
+  const ifX = CW / 2 - ifW / 2, ifY = py + 135;
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(ifX, ifY, ifW, ifH);
+  ctx.strokeStyle = '#5a4a30'; ctx.lineWidth = 1;
+  ctx.strokeRect(ifX, ifY, ifW, ifH);
+
+  // Input text
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 22px monospace';
+  const cursor = Math.sin(Date.now() / 400) > 0 ? '|' : '';
+  ctx.fillText(mathInput + cursor, CW / 2, ifY + 28);
+
+  // Result feedback
+  if (mathResult === 'correct') {
+    ctx.fillStyle = '#44dd66'; ctx.font = 'bold 20px monospace';
+    ctx.fillText('Correct!', CW / 2, py + 220);
+  } else if (mathResult === 'wrong') {
+    ctx.fillStyle = '#dd4444'; ctx.font = 'bold 18px monospace';
+    ctx.fillText('Wrong! Answer: ' + mathProblem.answer, CW / 2, py + 220);
+    ctx.fillStyle = '#aa6644'; ctx.font = '12px monospace';
+    ctx.fillText('Attempt ' + mathAttempts + '/3 — Press any key', CW / 2, py + 242);
+  }
+
+  // Controls hint
+  ctx.fillStyle = '#665544'; ctx.font = '11px monospace';
+  ctx.fillText('ENTER  Confirm  |  ESC  Cancel', CW / 2, py + ph - 18);
+}
+
+// ==================== DRAW TILE ====================
+function drawTile(tileType, x, y) {
+  const px = x * TILE * SCALE - camera.x;
+  const py = y * TILE * SCALE - camera.y;
+  if (px < -TILE*SCALE || px > CW || py < -TILE*SCALE || py > CH) return;
+
+  const uv = TILE_UV[tileType];
+  if (!uv) return;
+
+  if (tileType === 8) {
+    // Bonfire - so desenha o chao aqui, fogo e desenhado separado em drawBonfires()
+    drawTile(2, x, y);
+    return;
+  }
+  if (tileType === 9) {
+    // Chest - drawn separately
+    drawTile(2, x, y);
+    return;
+  }
+  if (tileType === 15 || tileType === 16) {
+    drawTile(2, x, y);
+    return;
+  }
+  if (tileType === 11) {
+    // Exit - draw floor underneath
+    drawTile(2, x, y);
+    return;
+  }
+  // Spike trap - animated
+  if (tileType === 21) {
+    drawTile(2, x, y);
+    const spkPhase = Math.sin(Date.now() / 500 + x * 3 + y * 7);
+    const spkAlpha = 0.4 + spkPhase * 0.3;
+    ctx.fillStyle = 'rgba(120,100,100,' + spkAlpha + ')';
+    const s = TILE * SCALE;
+    // Draw spike pattern
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+      const sx2 = px + 4 + i * 14, sy2 = py + 4 + j * 14;
+      ctx.beginPath(); ctx.moveTo(sx2, sy2 + 8); ctx.lineTo(sx2 + 4, sy2); ctx.lineTo(sx2 + 8, sy2 + 8); ctx.fill();
+    }
+    return;
+  }
+  // Lava - animated glow
+  if (tileType === 22) {
+    const lavaPhase = Math.sin(Date.now() / 800 + x * 2.3 + y * 1.7);
+    const r = 180 + Math.floor(lavaPhase * 30);
+    const g = 60 + Math.floor(lavaPhase * 20);
+    ctx.fillStyle = 'rgb(' + r + ',' + g + ',0)';
+    ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+    // Bubble effect
+    if (Math.sin(Date.now() / 300 + x * 5 + y * 11) > 0.8) {
+      ctx.fillStyle = 'rgba(255,200,50,0.4)';
+      ctx.beginPath(); ctx.arc(px + 20 + lavaPhase * 8, py + 20 + lavaPhase * 6, 4, 0, Math.PI * 2); ctx.fill();
+    }
+    return;
+  }
+  // Grass
+  if (tileType === 23) {
+    drawTile(12, x, y); // cursed floor base
+    ctx.fillStyle = 'rgba(60,90,40,0.3)';
+    ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+    // Grass blades
+    ctx.strokeStyle = 'rgba(80,120,50,0.5)'; ctx.lineWidth = 1;
+    for (let i = 0; i < 4; i++) {
+      const gx = px + 6 + ((x * 3 + i * 11) % 30);
+      const gy = py + TILE * SCALE - 2;
+      const sway = Math.sin(Date.now() / 1000 + x + i) * 3;
+      ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + sway, gy - 12 - (i % 3) * 4); ctx.stroke();
+    }
+    return;
+  }
+  // Lore tablet
+  if (tileType === 25) {
+    drawTile(2, x, y);
+    // Stone tablet
+    ctx.fillStyle = '#667788';
+    ctx.fillRect(px + 10, py + 6, 28, 34);
+    ctx.fillStyle = '#556677';
+    ctx.fillRect(px + 12, py + 8, 24, 30);
+    // Glowing runes
+    const glowPhase = Math.sin(Date.now() / 600 + x + y);
+    ctx.fillStyle = 'rgba(130,170,220,' + (0.4 + glowPhase * 0.3) + ')';
+    for (let i = 0; i < 3; i++) {
+      ctx.fillRect(px + 16, py + 12 + i * 9, 16, 2);
+    }
+    // Glow
+    ctx.save();
+    ctx.shadowColor = '#6688bb'; ctx.shadowBlur = 8 + glowPhase * 4;
+    ctx.fillStyle = 'rgba(100,140,200,0.1)';
+    ctx.fillRect(px + 14, py + 10, 20, 26);
+    ctx.restore();
+    return;
+  }
+  // Rubble
+  if (tileType === 24) {
+    drawTile(2, x, y);
+    ctx.fillStyle = '#5a4a40';
+    // Random rubble pieces based on position
+    const seed = x * 7 + y * 13;
+    for (let i = 0; i < 4; i++) {
+      const rx = px + ((seed + i * 17) % 30) + 4;
+      const ry = py + ((seed + i * 23) % 30) + 4;
+      const rs = 4 + (seed + i) % 6;
+      ctx.fillRect(rx, ry, rs, rs - 1);
+    }
+    return;
+  }
+
+  if (uv.img && images[uv.img]) {
+    ctx.drawImage(images[uv.img], uv.sx, uv.sy, uv.sw, uv.sh, px, py, TILE*SCALE, TILE*SCALE);
+    // Apply tint overlay for themed floors
+    if (uv.tint) {
+      ctx.fillStyle = uv.tint;
+      ctx.globalAlpha = 0.35;
+      ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+      ctx.globalAlpha = 1.0;
+    }
+    // Subtle brightness variation based on position hash for floor tiles
+    if (tileType === 1 || tileType === 2 || tileType === 12 || tileType === 13) {
+      const hash = ((x * 7 + y * 13) % 5);
+      if (hash === 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+      } else if (hash === 1) {
+        ctx.fillStyle = 'rgba(0,0,0,0.06)';
+        ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+      }
+    }
+  } else if (uv.color) {
+    ctx.fillStyle = uv.color;
+    ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+    // Subtle variation for solid color tiles
+    const hash = ((x * 7 + y * 13) % 4);
+    if (hash === 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.04)';
+      ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+    } else if (hash === 1) {
+      ctx.fillStyle = 'rgba(0,0,0,0.04)';
+      ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+    }
+  }
+}
+
+// Desenha TODAS as fogueiras como entidades (nao dependem de drawTile/culling)
+function drawBonfires() {
+  for (const b of bonfires) {
+    const px = b.x * TILE * SCALE - camera.x;
+    const py = b.y * TILE * SCALE - camera.y;
+    const centerX = px + TILE*SCALE/2;
+    const centerY = py + TILE*SCALE/2;
+
+    // GLOW grande visivel de longe (mesmo fora da tela parcialmente)
+    ctx.save();
+    const glowR = 6 * TILE * SCALE;
+    const flicker = 1 + Math.sin(Date.now()/200)*0.1;
+    const grad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, glowR * flicker);
+    grad.addColorStop(0, 'rgba(255,140,40,0.25)');
+    grad.addColorStop(0.3, 'rgba(255,100,20,0.1)');
+    grad.addColorStop(1, 'rgba(255,80,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(centerX - glowR, centerY - glowR, glowR*2, glowR*2);
+    ctx.restore();
+
+    // So desenha o fogo detalhado se estiver na tela
+    if (px > -TILE*SCALE*3 && px < CW+TILE*SCALE*3 && py > -TILE*SCALE*3 && py < CH+TILE*SCALE*3) {
+      // Animated fire sprite from fire_animation.png (row 2 = large bonfire, 44x48 per frame)
+      const fireImg = images['fire'];
+      if (fireImg) {
+        const frame = Math.floor(Date.now()/180) % 4;
+        const fw = 44, fh = 48;
+        const drawW = fw / 16 * TILE * SCALE * 0.8;
+        const drawH = fh / 16 * TILE * SCALE * 0.8;
+        ctx.drawImage(fireImg, frame * fw, 96, fw, fh, px + TILE*SCALE/2 - drawW/2, py - drawH * 0.4, drawW, drawH);
+      } else {
+        // Fallback hand-drawn fire
+        const f = Math.sin(Date.now()/100)*2;
+        ctx.save();
+        ctx.shadowColor = '#ff8833'; ctx.shadowBlur = 25;
+        ctx.fillStyle = '#8b5a2b';
+        ctx.fillRect(px+2*SCALE, py+8*SCALE, 12*SCALE, 4*SCALE);
+        ctx.fillStyle = '#ff6600';
+        ctx.fillRect(px+3*SCALE, py-f*SCALE, 10*SCALE, 14*SCALE);
+        ctx.fillStyle = '#ffcc22';
+        ctx.fillRect(px+5*SCALE, py-f*SCALE+2*SCALE, 6*SCALE, 10*SCALE);
+        ctx.fillStyle = '#ffffaa';
+        ctx.fillRect(px+6*SCALE, py-f*SCALE+4*SCALE, 4*SCALE, 6*SCALE);
+        ctx.restore();
+      }
+
+      // Spark particles
+      if (Math.random() < 0.3) {
+        addParticle(b.x*TILE+8, b.y*TILE+4, '#ffcc44', 0.5, (Math.random()-0.5)*1.5, -(Math.random()*2+1), 1);
+      }
+    }
+
+    // Texto de interacao
+    const dist = Math.hypot(b.x - player.x, b.y - player.y);
+    if (dist < 2) {
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(centerX-60, py-28, 120, 20);
+      ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffdd66';
+      ctx.fillText('[F] Rest', centerX, py-13);
+    }
+  }
+}
+
+// ==================== DRAW EXITS (ESCADAS) ====================
+function drawExits() {
+  for (const ex of activeExits) {
+    const px = ex.x * TILE * SCALE - camera.x;
+    const py = ex.y * TILE * SCALE - camera.y;
+    const centerX = px + TILE*SCALE/2;
+    const centerY = py + TILE*SCALE/2;
+
+    // Draw stairs using Objects.png sprite (stairs at 0,0 in objects sheet)
+    const objImg = images['objects'];
+    if (objImg) {
+      // Draw 3 rows of stair sprites (16x16 each) stacked, col 0
+      ctx.drawImage(objImg, 0, 0, 16, 16, px, py - TILE * SCALE, TILE * SCALE, TILE * SCALE);
+      ctx.drawImage(objImg, 0, 16, 16, 16, px, py, TILE * SCALE, TILE * SCALE);
+    } else {
+      const s = SCALE;
+      ctx.fillStyle = '#554433';
+      ctx.fillRect(px+2*s, py+1*s, 12*s, 14*s);
+      ctx.fillStyle = '#887766';
+      for (let i = 0; i < 5; i++) ctx.fillRect(px+3*s, py+(2+i*3)*s, 10*s, 2*s);
+      ctx.fillStyle = '#665544';
+      ctx.fillRect(px+2*s, py+1*s, 2*s, 14*s);
+      ctx.fillRect(px+12*s, py+1*s, 2*s, 14*s);
+    }
+
+    // Glow verde pulsante
+    ctx.save();
+    const pulse = 0.5 + Math.sin(Date.now()/400)*0.3;
+    const glowR = 3 * TILE * SCALE;
+    const grad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, glowR);
+    grad.addColorStop(0, `rgba(80,255,80,${0.15*pulse})`);
+    grad.addColorStop(1, 'rgba(80,255,80,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(centerX-glowR, centerY-glowR, glowR*2, glowR*2);
+    ctx.restore();
+
+    // Seta animada apontando para a saida
+    const arrowBob = Math.sin(Date.now()/300) * 4;
+    ctx.fillStyle = '#44ff44';
+    ctx.beginPath();
+    ctx.moveTo(centerX, py - 10 + arrowBob);
+    ctx.lineTo(centerX - 8, py - 20 + arrowBob);
+    ctx.lineTo(centerX + 8, py - 20 + arrowBob);
+    ctx.fill();
+
+    // Texto do destino
+    const dist = Math.hypot(ex.x - player.x, ex.y - player.y);
+    const mapNames = {
+      tutorial:'Tutorial Cave', ashWastes:'Ash Wastes',
+      boneCaverns:'Bone Caverns', cursedGrounds:'Cursed Grounds',
+      fireDepths:'Fire Depths', shadowRuins:'Shadow Ruins',
+      dragonLair:'Dragon Lair'
+    };
+    const destName = mapNames[ex.target] || ex.target;
+
+    ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    const tw = ctx.measureText(destName).width + 16;
+    ctx.fillRect(centerX - tw/2, py - 38, tw, 16);
+    ctx.fillStyle = '#88ff88';
+    ctx.fillText(destName, centerX, py - 26);
+
+    // Dica quando perto
+    if (dist < 3) {
+      ctx.fillStyle = 'rgba(0,0,0,0.8)';
+      ctx.fillRect(centerX - 80, py - 56, 160, 18);
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 12px monospace';
+      ctx.fillText('Walk here to enter!', centerX, py - 43);
+    }
+  }
+}
+
+// ==================== DRAW MAP ====================
+function drawMap() {
+  // Fundo claro em vez de preto
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, CW, CH);
+
+  const map = maps[player.currentMap];
+  const startX = Math.max(0, Math.floor(camera.x / (TILE*SCALE)) - 1);
+  const startY = Math.max(0, Math.floor(camera.y / (TILE*SCALE)) - 1);
+  const endX = Math.min(map.width, startX + Math.ceil(CW/(TILE*SCALE)) + 2);
+  const endY = Math.min(map.height, startY + Math.ceil(CH/(TILE*SCALE)) + 2);
+
+  for (let y = startY; y < endY; y++) {
+    for (let x = startX; x < endX; x++) {
+      const tile = getTile(map, x, y);
+      if (tile === 0) {
+        // Desenha vazio com cor escura visivel em vez de nada
+        const px = x*TILE*SCALE - camera.x;
+        const py = y*TILE*SCALE - camera.y;
+        ctx.fillStyle = '#111122';
+        ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+        continue;
+      }
+      drawTile(tile, x, y);
+    }
+  }
+}
+
+// ==================== DRAW ENTITIES ====================
+function drawSprite16(imgName, frameNum, x, y, flipX, tint) {
+  const img = images[imgName + '_' + (frameNum+1)];
+  const px = x * TILE * SCALE - camera.x;
+  const py = y * TILE * SCALE - camera.y;
+  if (px < -32*SCALE || px > CW+32 || py < -32*SCALE || py > CH+32) return;
+
+  if (tint) {
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = tint;
+    ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+    ctx.globalAlpha = 1;
+  }
+  if (img) {
+    ctx.save();
+    if (flipX) {
+      ctx.translate(px + TILE*SCALE, py);
+      ctx.scale(-1, 1);
+      ctx.drawImage(img, 0, 0, 16, 16, 0, 0, TILE*SCALE, TILE*SCALE);
+    } else {
+      ctx.drawImage(img, 0, 0, 16, 16, px, py, TILE*SCALE, TILE*SCALE);
+    }
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#ff00ff';
+    ctx.fillRect(px+4*SCALE, py+4*SCALE, 8*SCALE, 8*SCALE);
+  }
+}
+
+function drawPlayer() {
+  if (player.dead) return;
+  const px = player.x * TILE * SCALE - camera.x;
+  const py = player.y * TILE * SCALE - camera.y;
+
+  // Invincibility flash
+  if (player.invincible > 0 && Math.floor(player.invincible*10)%2===0) return;
+
+  // Dodge trail effect
+  if (player.dodging) {
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = '#6688cc';
+    ctx.fillRect(px+2*SCALE, py+2*SCALE, 12*SCALE, 13*SCALE);
+    ctx.globalAlpha = 1;
+  }
+
+  // Character sprite: col 0 (single character), rows 0-3 for animation
+  const img = images['character'];
+  const flipX = (player.facing === 2);
+  const isWalking = (keys['w']||keys['a']||keys['s']||keys['d']||keys['arrowup']||keys['arrowdown']||keys['arrowleft']||keys['arrowright']);
+  const walkBob = isWalking ? Math.sin(player.walkFrame * 2) * 1.5 * SCALE : 0;
+  // Use rows 0-3 as walk animation frames when moving, row 0 when idle
+  const animRow = isWalking ? (Math.floor(player.walkFrame) % 4) : 0;
+
+  if (img) {
+    ctx.save();
+    // Shadow under player
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.beginPath();
+    ctx.ellipse(px + TILE*SCALE/2, py + TILE*SCALE - SCALE, 7*SCALE, 2.5*SCALE, 0, 0, Math.PI*2);
+    ctx.fill();
+    // Character sprite: col 0, row = animRow
+    if (flipX) {
+      ctx.translate(px + TILE*SCALE, py + walkBob);
+      ctx.scale(-1, 1);
+      ctx.drawImage(img, 0, animRow * 16, 16, 16, 0, 0, TILE*SCALE, TILE*SCALE);
+    } else {
+      ctx.drawImage(img, 0, animRow * 16, 16, 16, px, py + walkBob, TILE*SCALE, TILE*SCALE);
+    }
+    ctx.restore();
+  } else {
+    // Fallback: personagem desenhado a mao
+    ctx.save();
+    if (flipX) { ctx.translate(px + TILE*SCALE, py + walkBob); ctx.scale(-1,1); } else { ctx.translate(px, py + walkBob); }
+    // Corpo (armadura azul)
+    ctx.fillStyle = '#4477bb';
+    ctx.fillRect(3*SCALE, 5*SCALE, 10*SCALE, 9*SCALE);
+    // Armadura detalhe
+    ctx.fillStyle = '#5588cc';
+    ctx.fillRect(4*SCALE, 6*SCALE, 8*SCALE, 4*SCALE);
+    // Cinto
+    ctx.fillStyle = '#664422';
+    ctx.fillRect(4*SCALE, 10*SCALE, 8*SCALE, 1*SCALE);
+    // Cabeca
+    ctx.fillStyle = '#ffddaa';
+    ctx.fillRect(4*SCALE, 0, 8*SCALE, 6*SCALE);
+    // Cabelo
+    ctx.fillStyle = '#553322';
+    ctx.fillRect(4*SCALE, 0, 8*SCALE, 2*SCALE);
+    ctx.fillRect(3*SCALE, 1*SCALE, 2*SCALE, 2*SCALE);
+    // Olhos
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(6*SCALE, 2*SCALE, 2*SCALE, 2*SCALE);
+    ctx.fillRect(9*SCALE, 2*SCALE, 2*SCALE, 2*SCALE);
+    ctx.fillStyle = '#222222';
+    ctx.fillRect(7*SCALE, 3*SCALE, 1*SCALE, 1*SCALE);
+    ctx.fillRect(10*SCALE, 3*SCALE, 1*SCALE, 1*SCALE);
+    // Pernas (anima so quando anda)
+    const legOff = isWalking ? Math.sin(player.walkFrame*2)*2*SCALE : 0;
+    ctx.fillStyle = '#335588';
+    ctx.fillRect(4*SCALE, 13*SCALE+legOff, 4*SCALE, 3*SCALE);
+    ctx.fillRect(8*SCALE, 13*SCALE-legOff, 4*SCALE, 3*SCALE);
+    // Botas
+    ctx.fillStyle = '#443322';
+    ctx.fillRect(4*SCALE, 15*SCALE+legOff, 4*SCALE, 1*SCALE);
+    ctx.fillRect(8*SCALE, 15*SCALE-legOff, 4*SCALE, 1*SCALE);
+    ctx.restore();
+  }
+
+  // Draw weapon (sempre visivel quando tem arma, destaque quando ataca)
+  if (player.weapon) {
+    ctx.save();
+    const isSword = player.weapon === 'sword';
+    const baseColor = isSword ? '#99bbee' : '#aa8855';
+    const brightColor = isSword ? '#ccddff' : '#ddaa66';
+    const attacking = player.attacking;
+
+    if (attacking) { ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 12; }
+
+    const wx = px + (player.facing===3?TILE*SCALE:player.facing===2?-6*SCALE:5*SCALE);
+    const wy = py + (player.facing===0?TILE*SCALE-2*SCALE:player.facing===1?-6*SCALE:3*SCALE);
+
+    ctx.fillStyle = attacking ? brightColor : baseColor;
+    ctx.globalAlpha = attacking ? 1 : 0.7;
+
+    if (isSword) {
+      // Espada
+      if (player.facing===0||player.facing===1) {
+        ctx.fillRect(wx, wy, 3*SCALE, attacking?14*SCALE:10*SCALE);
+        ctx.fillRect(wx-2*SCALE, wy+(attacking?0:6*SCALE), 7*SCALE, 2*SCALE); // guarda
+      } else {
+        ctx.fillRect(wx, wy, attacking?14*SCALE:10*SCALE, 3*SCALE);
+        ctx.fillRect(wx+(attacking?0:6*SCALE), wy-2*SCALE, 2*SCALE, 7*SCALE);
+      }
+    } else {
+      // Machado
+      if (player.facing===0||player.facing===1) {
+        ctx.fillRect(wx+1*SCALE, wy, 2*SCALE, attacking?14*SCALE:10*SCALE); // cabo
+        ctx.fillStyle = '#887766';
+        ctx.fillRect(wx-2*SCALE, wy, 8*SCALE, 5*SCALE); // cabeca machado
+      } else {
+        ctx.fillRect(wx, wy+1*SCALE, attacking?14*SCALE:10*SCALE, 2*SCALE);
+        ctx.fillStyle = '#887766';
+        ctx.fillRect(wx, wy-2*SCALE, 5*SCALE, 8*SCALE);
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+function drawEnemies() {
+  for (const e of enemies) {
+    const flipX = e.facing === 2;
+    const px = e.x*TILE*SCALE - camera.x;
+    const py = e.y*TILE*SCALE - camera.y;
+
+    // Shadow under enemy
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.beginPath();
+    ctx.ellipse(px + TILE*SCALE/2, py + TILE*SCALE - 2, 6*SCALE, 2*SCALE, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Aggro indicator glow
+    if (e.aggro) {
+      ctx.fillStyle = 'rgba(255,40,40,0.08)';
+      ctx.beginPath();
+      ctx.arc(px+TILE*SCALE/2, py+TILE*SCALE/2, TILE*SCALE*0.8, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    if (e.hitTimer > 0) {
+      drawSprite16(e.type, e.animFrame, e.x, e.y, flipX, '#ff0000');
+    }
+    drawSprite16(e.type, e.animFrame, e.x, e.y, flipX);
+
+    // HP bar - only show when damaged or aggro
+    if (e.hp < e.maxHp || e.aggro) {
+      const barW = TILE*SCALE;
+      const barY2 = py - 6;
+      ctx.fillStyle = '#0a0505'; ctx.fillRect(px, barY2, barW, 4);
+      ctx.fillStyle = '#cc3333'; ctx.fillRect(px, barY2, barW*(e.hp/e.maxHp), 4);
+      ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(px, barY2, barW*(e.hp/e.maxHp), 1);
+    }
+  }
+}
+
+function drawBosses() {
+  for (const b of bosses) {
+    const px = b.x*TILE*SCALE - camera.x;
+    const py = b.y*TILE*SCALE - camera.y;
+    const sz = TILE*SCALE*b.size;
+    const centerX = px + TILE*SCALE/2;
+    const centerY = py + TILE*SCALE/2;
+
+    // Boss aura glow
+    ctx.save();
+    const auraR = sz * 1.2;
+    const auraGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, auraR);
+    const auraColor = b.phase === 1 ? '255,30,0' : b.isFinal ? '200,40,20' : '180,140,60';
+    auraGrad.addColorStop(0, `rgba(${auraColor},0.15)`);
+    auraGrad.addColorStop(0.5, `rgba(${auraColor},0.05)`);
+    auraGrad.addColorStop(1, `rgba(${auraColor},0)`);
+    ctx.fillStyle = auraGrad;
+    ctx.fillRect(centerX - auraR, centerY - auraR, auraR * 2, auraR * 2);
+    ctx.restore();
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.beginPath();
+    ctx.ellipse(centerX, py + sz * 0.45, sz * 0.4, sz * 0.12, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Boss sprite (scaled up from monster animation)
+    const frame = b.animFrame;
+    const spriteKey = b.sprite + '_' + (frame + 1);
+    const spriteImg = images[spriteKey];
+    const drawSz = sz;
+
+    if (b.hitTimer > 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.fillRect(centerX - drawSz/2, centerY - drawSz/2, drawSz, drawSz);
+    }
+
+    if (spriteImg) {
+      ctx.save();
+      if (b.facing === 2) {
+        ctx.translate(centerX + drawSz/2, centerY - drawSz/2);
+        ctx.scale(-1, 1);
+        ctx.drawImage(spriteImg, 0, 0, 16, 16, 0, 0, drawSz, drawSz);
+      } else {
+        ctx.drawImage(spriteImg, 0, 0, 16, 16, centerX - drawSz/2, centerY - drawSz/2, drawSz, drawSz);
+      }
+      ctx.restore();
+    } else {
+      // Fallback colored rect
+      ctx.fillStyle = b.hitTimer > 0 ? '#ffffff' : b.color;
+      ctx.fillRect(centerX - drawSz/2, centerY - drawSz/2, drawSz, drawSz);
+    }
+
+    // Phase 2 red outline
+    if (b.phase === 1) {
+      ctx.strokeStyle = `rgba(255,50,20,${0.5 + Math.sin(Date.now()/150)*0.3})`;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(centerX - drawSz/2 - 2, centerY - drawSz/2 - 2, drawSz + 4, drawSz + 4);
+    }
+
+    // Dragon wings for final boss
+    if (b.isFinal) {
+      const wingFlap = Math.sin(Date.now()/300)*10;
+      ctx.save();
+      ctx.globalAlpha = 0.8;
+      ctx.fillStyle = b.color;
+      // Left wing
+      ctx.beginPath();
+      ctx.moveTo(centerX - drawSz/2, centerY - drawSz*0.1);
+      ctx.lineTo(centerX - drawSz*1.3, centerY - drawSz*0.6 + wingFlap);
+      ctx.lineTo(centerX - drawSz*0.8, centerY - drawSz*0.2 + wingFlap*0.5);
+      ctx.lineTo(centerX - drawSz/2, centerY + drawSz*0.3);
+      ctx.fill();
+      ctx.strokeStyle = '#ff5533'; ctx.lineWidth = 1.5; ctx.stroke();
+      // Right wing
+      ctx.beginPath();
+      ctx.moveTo(centerX + drawSz/2, centerY - drawSz*0.1);
+      ctx.lineTo(centerX + drawSz*1.3, centerY - drawSz*0.6 + wingFlap);
+      ctx.lineTo(centerX + drawSz*0.8, centerY - drawSz*0.2 + wingFlap*0.5);
+      ctx.lineTo(centerX + drawSz/2, centerY + drawSz*0.3);
+      ctx.fill();
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      // Horns
+      ctx.fillStyle = '#ddaa44';
+      ctx.beginPath();
+      ctx.moveTo(centerX - drawSz*0.2, centerY - drawSz/2);
+      ctx.lineTo(centerX - drawSz*0.3, centerY - drawSz*0.8);
+      ctx.lineTo(centerX - drawSz*0.1, centerY - drawSz/2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(centerX + drawSz*0.2, centerY - drawSz/2);
+      ctx.lineTo(centerX + drawSz*0.3, centerY - drawSz*0.8);
+      ctx.lineTo(centerX + drawSz*0.1, centerY - drawSz/2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // ---- Boss HP bar (at top of screen for better visibility) ----
+    const barW = 300;
+    const barX = CW / 2 - barW / 2;
+    const barY = CH - 40;
+    ctx.fillStyle = 'rgba(10,5,5,0.8)';
+    ctx.fillRect(barX - 4, barY - 20, barW + 8, 36);
+    ctx.strokeStyle = 'rgba(180,80,40,0.4)'; ctx.lineWidth = 1;
+    ctx.strokeRect(barX - 4, barY - 20, barW + 8, 36);
+    // Name above bar
+    ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#ccaa77';
+    ctx.fillText(b.name, CW / 2, barY - 6);
+    // Bar
+    ctx.fillStyle = '#1a0808'; ctx.fillRect(barX, barY, barW, 12);
+    const hpGrad = ctx.createLinearGradient(barX, barY, barX + barW, barY);
+    hpGrad.addColorStop(0, b.phase===1 ? '#dd4400' : '#cc2222');
+    hpGrad.addColorStop(1, b.phase===1 ? '#ff8800' : '#ff4444');
+    ctx.fillStyle = hpGrad;
+    ctx.fillRect(barX, barY, barW * (b.hp / b.maxHp), 12);
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(barX, barY, barW * (b.hp / b.maxHp), 4);
+  }
+}
+
+function drawNPCs() {
+  for (const n of npcs) {
+    n.animTimer += dt;
+    if (n.animTimer > 0.3) { n.animTimer = 0; n.animFrame = (n.animFrame+1)%4; }
+    const npx = n.x*TILE*SCALE - camera.x;
+    const npy = n.y*TILE*SCALE - camera.y;
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(npx + TILE*SCALE/2, npy + TILE*SCALE - 2, 6*SCALE, 2*SCALE, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Use priest2 for upgrader, priest for merchant
+    const spriteType = n.type === 'upgrader' ? 'priest2' : 'priest';
+    drawSprite16(spriteType, n.animFrame, n.x, n.y, false);
+
+    // Name plate
+    const cx = npx + TILE*SCALE/2;
+    const nameY = npy - 10;
+    const nameW = ctx.measureText(n.name).width + 12;
+    ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(10,8,5,0.7)';
+    ctx.fillRect(cx - nameW/2, nameY - 10, nameW, 14);
+    ctx.fillStyle = '#88dd88';
+    ctx.fillText(n.name, cx, nameY);
+
+    // Interaction prompt
+    if (Math.hypot(n.x-player.x, n.y-player.y) < 2.5) {
+      ctx.fillStyle = 'rgba(10,8,5,0.8)';
+      ctx.fillRect(cx - 50, nameY - 30, 100, 18);
+      ctx.strokeStyle = 'rgba(200,170,80,0.3)'; ctx.lineWidth = 1;
+      ctx.strokeRect(cx - 50, nameY - 30, 100, 18);
+      ctx.fillStyle = '#ddcc88'; ctx.font = 'bold 11px monospace';
+      ctx.fillText('[F] Interact', cx, nameY - 16);
+    }
+  }
+}
+
+function drawChests() {
+  for (const c of chests) {
+    const px = c.x*TILE*SCALE - camera.x;
+    const py = c.y*TILE*SCALE - camera.y;
+    const cx = px + TILE*SCALE/2;
+    const cy = py + TILE*SCALE/2;
+
+    // Big beacon for weapon chest during tutorial step 3
+    const isWeaponChest = !c.opened && c.item === 'weapon_choice';
+    const showBeacon = isWeaponChest && !player.tutorialDone && player.tutorialStep === 3;
+    if (showBeacon) {
+      ctx.save();
+      const pulse = 0.5 + Math.sin(Date.now() / 300) * 0.5;
+      // Large pulsing glow circle
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 80 + pulse * 20);
+      grad.addColorStop(0, 'rgba(255,200,60,0.25)');
+      grad.addColorStop(0.5, 'rgba(255,170,40,0.08)');
+      grad.addColorStop(1, 'rgba(255,150,30,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(cx - 100, cy - 100, 200, 200);
+      // Rotating rays
+      ctx.globalAlpha = 0.15 + pulse * 0.1;
+      ctx.strokeStyle = '#ffcc44';
+      ctx.lineWidth = 2;
+      const t = Date.now() / 1500;
+      for (let r = 0; r < 4; r++) {
+        const a = t + r * Math.PI / 2;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a) * 20, cy + Math.sin(a) * 20);
+        ctx.lineTo(cx + Math.cos(a) * 60, cy + Math.sin(a) * 60);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Use individual chest animation sprites
+    const frame = Math.floor(Date.now() / 250) % 4;
+    const imgKey = c.opened ? ('chestOpen_' + (frame + 1)) : ('chest_' + (frame + 1));
+    const img = images[imgKey];
+    if (img) {
+      // Glow for unopened
+      if (!c.opened) {
+        ctx.save();
+        ctx.shadowColor = showBeacon ? '#ffee66' : '#ffcc44';
+        ctx.shadowBlur = showBeacon ? 25 : 10;
+        ctx.drawImage(img, 0, 0, 16, 16, px, py, TILE*SCALE, TILE*SCALE);
+        ctx.restore();
+      } else {
+        ctx.drawImage(img, 0, 0, 16, 16, px, py, TILE*SCALE, TILE*SCALE);
+      }
+    } else {
+      // Fallback to doors_lever_chest_animation.png
+      const sheetImg = images['doorsChest'];
+      if (sheetImg) {
+        const srcY = c.opened ? 160 : 144;
+        ctx.drawImage(sheetImg, 0, srcY, 16, 16, px, py, TILE*SCALE, TILE*SCALE);
+      } else {
+        ctx.save();
+        if (!c.opened) { ctx.shadowColor = showBeacon ? '#ffee66' : '#ffcc44'; ctx.shadowBlur = showBeacon ? 25 : 8; }
+        ctx.fillStyle = c.opened ? '#6b5533' : '#aa8844';
+        ctx.fillRect(px+2*SCALE, py+4*SCALE, 12*SCALE, 10*SCALE);
+        ctx.strokeStyle = '#ccaa66'; ctx.lineWidth = 1;
+        ctx.strokeRect(px+2*SCALE, py+4*SCALE, 12*SCALE, 10*SCALE);
+        if (!c.opened) { ctx.fillStyle='#ffdd44'; ctx.fillRect(px+6*SCALE, py+8*SCALE, 4*SCALE, 3*SCALE); }
+        ctx.restore();
+      }
+    }
+
+    // Label above weapon chest during tutorial
+    if (showBeacon) {
+      ctx.save();
+      const bob = Math.sin(Date.now() / 350) * 4;
+      ctx.textAlign = 'center'; ctx.font = 'bold 13px monospace';
+      // Background
+      ctx.fillStyle = 'rgba(10,8,5,0.85)';
+      ctx.fillRect(cx - 65, py - 52 + bob, 130, 22);
+      ctx.strokeStyle = '#ffcc44'; ctx.lineWidth = 1;
+      ctx.strokeRect(cx - 65, py - 52 + bob, 130, 22);
+      // Text
+      ctx.fillStyle = '#ffdd66';
+      ctx.fillText('YOUR WEAPON IS HERE!', cx, py - 36 + bob);
+      // Down arrow
+      ctx.fillStyle = '#ffcc44';
+      ctx.font = 'bold 18px monospace';
+      ctx.fillText('\u2193', cx, py - 8 + Math.sin(Date.now()/200)*3);
+      ctx.restore();
+    }
+
+    if (!c.opened && Math.hypot(c.x-player.x, c.y-player.y) < 2) {
+      ctx.fillStyle='rgba(10,8,5,0.75)';
+      ctx.fillRect(cx - 42, py-24, 84, 20);
+      ctx.strokeStyle = 'rgba(200,170,80,0.3)'; ctx.lineWidth = 1;
+      ctx.strokeRect(cx - 42, py-24, 84, 20);
+      ctx.font='bold 11px monospace'; ctx.textAlign='center';
+      ctx.fillStyle='#ddcc88';
+      ctx.fillText('[F] Open', cx, py-10);
+    }
+  }
+}
+
+function drawItems() {
+  for (const item of items) {
+    const px = item.x*TILE*SCALE - camera.x;
+    const py = item.y*TILE*SCALE - camera.y;
+    const bob = Math.sin(Date.now()/300 + item.x*7)*3;
+
+    // Item glow
+    ctx.save();
+    const glowColor = item.type==='matter' ? '#ffffff' : item.type==='ashes' ? '#ffaa33' : '#ccaa44';
+    ctx.shadowColor = glowColor; ctx.shadowBlur = 12;
+
+    if (item.type === 'ashes') {
+      const frame = Math.floor(Date.now()/200)%4;
+      const cimg = images['coin_'+(frame+1)];
+      if (cimg) { ctx.drawImage(cimg, 0,0,16,16, px, py+bob, TILE*SCALE, TILE*SCALE); }
+      else { ctx.fillStyle='#ffcc44'; ctx.fillRect(px+3*SCALE, py+3*SCALE+bob, 10*SCALE, 10*SCALE); }
+    } else if (item.type === 'matter') {
+      // Glowing matter orb
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowBlur = 25;
+      ctx.beginPath();
+      ctx.arc(px + TILE*SCALE/2, py + TILE*SCALE/2 + bob, 6*SCALE, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#88bbff';
+      ctx.beginPath();
+      ctx.arc(px + TILE*SCALE/2, py + TILE*SCALE/2 + bob, 4*SCALE, 0, Math.PI*2);
+      ctx.fill();
+      // Orbiting sparkles
+      for (let j = 0; j < 4; j++) {
+        const ang = Date.now() / 500 + j * Math.PI / 2;
+        const ox = Math.cos(ang) * 8 * SCALE;
+        const oy = Math.sin(ang) * 5 * SCALE;
+        ctx.fillStyle = 'rgba(200,220,255,0.6)';
+        ctx.fillRect(px + TILE*SCALE/2 + ox - 1, py + TILE*SCALE/2 + bob + oy - 1, 3, 3);
+      }
+    } else if (item.type === 'ore') {
+      // Ore with rock sprite from objects
+      const objImg = images['objects'];
+      if (objImg) {
+        const oreCol = item.value <= 5 ? 6 : item.value <= 15 ? 7 : 8;
+        ctx.drawImage(objImg, oreCol * 16, 16, 16, 16, px, py + bob, TILE*SCALE, TILE*SCALE);
+      } else {
+        ctx.fillStyle = '#ffcc55';
+        ctx.fillRect(px+3*SCALE, py+3*SCALE+bob, 10*SCALE, 10*SCALE);
+      }
+    } else {
+      const flaskFrame = Math.floor(Date.now()/250) % 4;
+      const fImg = images['flask_'+(flaskFrame+1)];
+      if (fImg) { ctx.drawImage(fImg, 0,0,16,16, px, py+bob, TILE*SCALE, TILE*SCALE); }
+      else { ctx.fillStyle='#55ccee'; ctx.fillRect(px+3*SCALE, py+3*SCALE+bob, 10*SCALE, 10*SCALE); }
+    }
+    ctx.restore();
+  }
+}
+
+// drawBonfireInteract agora esta dentro de drawBonfires()
+function drawBonfireInteract() {}
+
+// ==================== DARK ATMOSPHERE / LIGHTING ====================
+function drawLighting() {
+  // Apenas uma leve vinheta nas bordas - sem escuridao no centro
+  const plx = player.x*TILE*SCALE - camera.x + TILE*SCALE/2;
+  const ply = player.y*TILE*SCALE - camera.y + TILE*SCALE/2;
+  const r = CW * 0.8;
+  const grad = ctx.createRadialGradient(plx, ply, r*0.5, plx, ply, r);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.25)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, CW, CH);
+}
+
+// ==================== HUD ====================
+function drawHUD() {
+  // ---- LEFT PANEL ----
+  ctx.fillStyle = 'rgba(10,8,15,0.75)';
+  ctx.fillRect(6, 6, 230, 130);
+  ctx.strokeStyle = 'rgba(150,120,80,0.25)'; ctx.lineWidth = 1;
+  ctx.strokeRect(6, 6, 230, 130);
+
+  // HP Bar with gradient
+  const hpRatio = player.hp / player.maxHp;
+  ctx.fillStyle = '#1a0808'; ctx.fillRect(12, 14, 216, 20);
+  if (hpRatio > 0) {
+    const hpGrad = ctx.createLinearGradient(12, 14, 12, 34);
+    hpGrad.addColorStop(0, hpRatio < 0.3 ? '#cc2222' : '#cc3333');
+    hpGrad.addColorStop(1, hpRatio < 0.3 ? '#881111' : '#992222');
+    ctx.fillStyle = hpGrad;
+    ctx.fillRect(13, 15, 214 * hpRatio, 18);
+    // Shine
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(13, 15, 214 * hpRatio, 6);
+  }
+  ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center'; ctx.fillStyle = '#eeddcc';
+  ctx.fillText(Math.ceil(player.hp) + ' / ' + player.maxHp, 120, 28);
+  // HP icon
+  ctx.fillStyle = '#dd3333'; ctx.font = '11px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('+', 14, 28);
+
+  // Stamina Bar
+  const stRatio = player.stamina / player.maxStamina;
+  ctx.fillStyle = '#081a08'; ctx.fillRect(12, 38, 216, 14);
+  if (stRatio > 0) {
+    const stGrad = ctx.createLinearGradient(12, 38, 12, 52);
+    stGrad.addColorStop(0, '#33bb44');
+    stGrad.addColorStop(1, '#228833');
+    ctx.fillStyle = stGrad;
+    ctx.fillRect(13, 39, 214 * stRatio, 12);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(13, 39, 214 * stRatio, 4);
+  }
+  ctx.font = '10px monospace'; ctx.textAlign = 'center'; ctx.fillStyle = '#bbddbb';
+  ctx.fillText(Math.ceil(player.stamina) + ' / ' + player.maxStamina, 120, 49);
+
+  // Stats row
+  ctx.textAlign = 'left'; ctx.font = '11px monospace';
+  // Ashes with coin icon
+  const coinFrame = Math.floor(Date.now() / 200) % 4;
+  const coinImg = images['coin_' + (coinFrame + 1)];
+  if (coinImg) ctx.drawImage(coinImg, 0, 0, 16, 16, 12, 55, 14, 14);
+  ctx.fillStyle = '#eebb44';
+  ctx.fillText(player.ashes, 30, 66);
+
+  // Level
+  ctx.fillStyle = '#aaaadd';
+  ctx.fillText('Lv.' + player.level, 100, 66);
+
+  // Weapon
+  if (player.weapon) {
+    const wname = player.weapon === 'sword' ? 'Sword' : 'Axe';
+    ctx.fillStyle = player.weapon === 'sword' ? '#aaccee' : '#ccaa77';
+    ctx.fillText(wname + '+' + player.weaponLevel, 150, 66);
+  }
+
+  // Inventory row
+  ctx.font = '10px monospace';
+  const flaskCount = player.inventory.filter(i => i.type === 'flask').length;
+  const oreCount = player.inventory.filter(i => i.type === 'ore').length;
+  // Flask icon
+  const flaskImg = images['flask_1'];
+  if (flaskImg) ctx.drawImage(flaskImg, 0, 0, 16, 16, 12, 73, 13, 13);
+  ctx.fillStyle = '#dd6666'; ctx.fillText('x' + flaskCount, 28, 84);
+  // Ore count
+  ctx.fillStyle = '#ccaa55'; ctx.fillText('Ores: ' + oreCount, 70, 84);
+  // Pickaxe indicator
+  if (player.hasPickaxe) {
+    ctx.fillStyle = '#888'; ctx.fillText('[E] Mine', 160, 84);
+  }
+
+  // Matter pieces - 9 diamond indicators
+  ctx.fillStyle = '#776655'; ctx.font = '10px monospace';
+  ctx.fillText('Neutral Matter:', 12, 100);
+  for (let i = 0; i < 9; i++) {
+    const mx = 120 + i * 13, my = 93;
+    ctx.save();
+    ctx.translate(mx + 4, my + 5);
+    ctx.rotate(Math.PI / 4);
+    if (player.matterPieces[i]) {
+      ctx.shadowColor = '#88aaff'; ctx.shadowBlur = 6;
+      ctx.fillStyle = '#aaccff';
+    } else {
+      ctx.fillStyle = '#2a2a33';
+    }
+    ctx.fillRect(-3, -3, 6, 6);
+    ctx.restore();
+  }
+
+  // Controls hint
+  ctx.fillStyle = '#443a33'; ctx.font = '9px monospace';
+  ctx.fillText('SHIFT dodge | F interact | Q flask | TAB arrow', 12, 128);
+
+  // ---- MINIMAP (bottom left) ----
+  if (player.tutorialDone) {
+    const map = maps[player.currentMap];
+    const mmScale = Math.min(2, Math.min(120/map.width, 80/map.height));
+    const mmW = Math.floor(map.width * mmScale), mmH = Math.floor(map.height * mmScale);
+    const mmX = 8, mmY = CH - mmH - 8;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(mmX-2, mmY-2, mmW+4, mmH+4);
+    ctx.strokeStyle = 'rgba(150,120,80,0.3)'; ctx.lineWidth = 1;
+    ctx.strokeRect(mmX-2, mmY-2, mmW+4, mmH+4);
+    // Draw tiles as tiny pixels
+    for (let ty=0; ty<map.height; ty++) {
+      for (let tx=0; tx<map.width; tx++) {
+        const t = map.tiles[ty*map.width+tx];
+        if (t===0) continue;
+        let c;
+        if (t===3||t===4||t===20) c='#555';
+        else if (t===22) c='#a44';
+        else if (t===14) c='#f44';
+        else if (t===11) c='#4f4';
+        else if (t===8) c='#fa4';
+        else if (WALKABLE.has(t)) c='#333';
+        else c='#444';
+        ctx.fillStyle = c;
+        ctx.fillRect(mmX+tx*mmScale, mmY+ty*mmScale, Math.max(1,mmScale), Math.max(1,mmScale));
+      }
+    }
+    // Player dot
+    ctx.fillStyle = '#4af';
+    ctx.fillRect(mmX+player.x*mmScale-1, mmY+player.y*mmScale-1, 3, 3);
+    // Enemy dots
+    ctx.fillStyle = '#f44';
+    for (const e of enemies) ctx.fillRect(mmX+e.x*mmScale, mmY+e.y*mmScale, 2, 2);
+    // Boss dots
+    ctx.fillStyle = '#ff0';
+    for (const b of bosses) ctx.fillRect(mmX+b.x*mmScale-1, mmY+b.y*mmScale-1, 3, 3);
+  }
+
+  // ---- MINING BAR ----
+  if (player.mining) {
+    const mw = 220, mh = 18;
+    ctx.fillStyle = 'rgba(10,8,15,0.85)';
+    ctx.fillRect(CW / 2 - mw / 2 - 6, CH - 54, mw + 12, mh + 14);
+    ctx.strokeStyle = 'rgba(200,170,80,0.4)'; ctx.lineWidth = 1;
+    ctx.strokeRect(CW / 2 - mw / 2 - 6, CH - 54, mw + 12, mh + 14);
+    ctx.fillStyle = '#1a1a11'; ctx.fillRect(CW / 2 - mw / 2, CH - 48, mw, mh);
+    const prog = 1 - player.mineTimer;
+    const mGrad = ctx.createLinearGradient(CW / 2 - mw / 2, 0, CW / 2 + mw / 2, 0);
+    mGrad.addColorStop(0, '#bb8800'); mGrad.addColorStop(1, '#ffcc22');
+    ctx.fillStyle = mGrad;
+    ctx.fillRect(CW / 2 - mw / 2, CH - 48, mw * prog, mh);
+    ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+    ctx.fillText('Mining ' + Math.ceil(prog * 100) + '%', CW / 2, CH - 36);
+  }
+
+  // ---- MAP NAME (bottom right) ----
+  const map = maps[player.currentMap];
+  ctx.font = '11px monospace'; ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(10,8,15,0.6)';
+  const nameW = ctx.measureText(map.name).width + 20;
+  ctx.fillRect(CW - nameW - 6, CH - 26, nameW + 6, 22);
+  ctx.fillStyle = '#998877';
+  ctx.fillText(map.name, CW - 10, CH - 11);
+
+  // ---- OBJECTIVE (top right) ----
+  if (player.tutorialDone) {
+    const obj = getCurrentObjective();
+    ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(10,8,15,0.7)';
+    const objW = ctx.measureText(obj).width + 30;
+    ctx.fillRect(CW - objW - 8, 8, objW + 8, 28);
+    ctx.strokeStyle = 'rgba(150,120,80,0.2)'; ctx.lineWidth = 1;
+    ctx.strokeRect(CW - objW - 8, 8, objW + 8, 28);
+    ctx.fillStyle = '#aa8844'; ctx.font = 'bold 9px monospace';
+    ctx.fillText('OBJECTIVE', CW - 12, 19);
+    ctx.fillStyle = '#ccbb99'; ctx.font = '10px monospace';
+    ctx.fillText(obj, CW - 12, 31);
+  }
+
+  ctx.textAlign = 'center';
+}
+
+// ==================== UI SCREENS ====================
+function drawTitle() {
+  // Dark gradient background
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, CH);
+  bgGrad.addColorStop(0, '#0a0508');
+  bgGrad.addColorStop(0.5, '#1a0a0a');
+  bgGrad.addColorStop(1, '#0a0508');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, CW, CH);
+
+  // Animated ember particles rising
+  for (let i = 0; i < 60; i++) {
+    const seed = i * 137.5;
+    const px = (seed * 7.3 + Date.now() / (30 + i % 10)) % CW;
+    const py = CH - ((Date.now() / (20 + i % 15) + seed * 3) % (CH + 40));
+    const sz = 1 + (i % 3);
+    const life = (py / CH);
+    const alpha = life * (0.15 + Math.sin(Date.now() / 300 + i) * 0.1);
+    const r = 255, g = Math.floor(60 + life * 100), b = Math.floor(life * 30);
+    ctx.fillStyle = `rgba(${r},${g},${b},${Math.max(0, alpha)})`;
+    ctx.fillRect(px, py, sz, sz);
+  }
+
+  // Ground ember glow at bottom
+  const bottomGlow = ctx.createLinearGradient(0, CH - 80, 0, CH);
+  bottomGlow.addColorStop(0, 'rgba(180,50,10,0)');
+  bottomGlow.addColorStop(1, 'rgba(180,50,10,0.15)');
+  ctx.fillStyle = bottomGlow;
+  ctx.fillRect(0, CH - 80, CW, 80);
+
+  // Decorative line
+  const lineY = CH / 2 - 20;
+  ctx.strokeStyle = 'rgba(180,80,30,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(CW / 2 - 250, lineY);
+  ctx.lineTo(CW / 2 + 250, lineY);
+  ctx.stroke();
+  // Diamond ornament center
+  ctx.fillStyle = 'rgba(255,140,40,0.5)';
+  ctx.save(); ctx.translate(CW / 2, lineY); ctx.rotate(Math.PI / 4);
+  ctx.fillRect(-4, -4, 8, 8); ctx.restore();
+  // Side ornaments
+  ctx.fillStyle = 'rgba(180,80,30,0.3)';
+  ctx.fillRect(CW / 2 - 250, lineY - 1, 20, 2);
+  ctx.fillRect(CW / 2 + 230, lineY - 1, 20, 2);
+
+  ctx.textAlign = 'center';
+
+  // Title shadow
+  ctx.save();
+  ctx.shadowColor = '#ff4400';
+  ctx.shadowBlur = 40;
+  ctx.fillStyle = '#aa2200';
+  ctx.font = 'bold 56px monospace';
+  ctx.fillText('TOPDOUW', CW / 2, CH / 2 - 80);
+  ctx.restore();
+
+  // Title main
+  ctx.fillStyle = '#dd4411';
+  ctx.font = 'bold 56px monospace';
+  ctx.fillText('TOPDOUW', CW / 2, CH / 2 - 80);
+  // Title highlight
+  ctx.fillStyle = '#ff7744';
+  ctx.font = 'bold 56px monospace';
+  ctx.globalAlpha = 0.4 + Math.sin(Date.now() / 1000) * 0.2;
+  ctx.fillText('TOPDOUW', CW / 2, CH / 2 - 81);
+  ctx.globalAlpha = 1;
+
+  // Subtitle
+  ctx.fillStyle = '#cc8855';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText('A B Y S S   O F   A S H E S', CW / 2, CH / 2 - 40);
+
+  // Sword decoration (left)
+  ctx.save();
+  ctx.translate(CW / 2 - 180, CH / 2 - 60);
+  ctx.rotate(-0.3);
+  ctx.fillStyle = '#667788'; ctx.fillRect(-2, -20, 4, 40); // blade
+  ctx.fillStyle = '#8b6914'; ctx.fillRect(-6, 15, 12, 4); // guard
+  ctx.fillStyle = '#6b4914'; ctx.fillRect(-2, 19, 4, 8); // handle
+  ctx.restore();
+  // Sword decoration (right)
+  ctx.save();
+  ctx.translate(CW / 2 + 180, CH / 2 - 60);
+  ctx.rotate(0.3);
+  ctx.fillStyle = '#667788'; ctx.fillRect(-2, -20, 4, 40);
+  ctx.fillStyle = '#8b6914'; ctx.fillRect(-6, 15, 12, 4);
+  ctx.fillStyle = '#6b4914'; ctx.fillRect(-2, 19, 4, 8);
+  ctx.restore();
+
+  // Start prompt
+  const blink = Math.sin(Date.now() / 500) > 0;
+  if (blink) {
+    ctx.fillStyle = '#aa8866';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('[ PRESS ENTER ]', CW / 2, CH / 2 + 50);
+  }
+
+  // Controls at bottom
+  ctx.fillStyle = '#4a3a2a';
+  ctx.fillRect(CW / 2 - 300, CH - 60, 600, 1);
+  ctx.fillStyle = '#665544';
+  ctx.font = '11px monospace';
+  ctx.fillText('WASD  Move  |  MOUSE/SPACE  Attack  |  E  Mine  |  F  Interact  |  SHIFT  Dodge', CW / 2, CH - 35);
+
+  // Version
+  ctx.fillStyle = '#332222';
+  ctx.font = '9px monospace';
+  ctx.fillText('v1.0', CW - 30, CH - 8);
+
+  if (keys['enter']) { gameState = STATE.INTRO; introStep = 0; stateTimer = 0; keys['enter'] = false; }
+}
+
+function drawIntro() {
+  ctx.fillStyle = '#080508'; ctx.fillRect(0, 0, CW, CH);
+
+  // Subtle ember particles
+  for (let i = 0; i < 20; i++) {
+    const seed = i * 97.3;
+    const px = (seed * 5 + Date.now() / 50) % CW;
+    const py = CH - ((Date.now() / 30 + seed * 2) % CH);
+    ctx.fillStyle = `rgba(200,80,20,${0.05 + Math.sin(i) * 0.03})`;
+    ctx.fillRect(px, py, 1.5, 1.5);
+  }
+
+  ctx.textAlign = 'center';
+
+  const texts = [
+    { text: 'In the beginning, there was nothing but silence.', color: '#887766' },
+    { text: 'Then the God shaped this world from the void.', color: '#998877' },
+    { text: 'Mountains rose. Rivers flowed. Life blossomed.', color: '#99aa88' },
+    { text: 'To protect it all, he forged the Neutral Matter.', color: '#aabbcc' },
+    { text: 'A divine substance - the soul of creation itself.', color: '#99aacc' },
+    { text: 'But the God grew tired of his creation...', color: '#887766' },
+    { text: 'And one day, without warning, he departed.', color: '#776655' },
+    { text: 'Everything turned to ashes.', color: '#cc6633' },
+    { text: 'The Neutral Matter shattered into nine fragments.', color: '#aabbcc' },
+    { text: 'Its guardian - the Dragon - lost its purpose and its mind.', color: '#cc4433' },
+    { text: 'Now you must gather the fragments. Forge the divine weapon.', color: '#ccaa66' },
+    { text: 'And bring an end to the endless burning...', color: '#ddccaa' },
+  ];
+
+  stateTimer += dt;
+  const currentText = Math.min(Math.floor(stateTimer / 2.0), texts.length - 1);
+
+  // Letterbox bars
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, CW, 60);
+  ctx.fillRect(0, CH - 60, CW, 60);
+
+  for (let i = 0; i <= currentText; i++) {
+    const fadeIn = i === currentText ? Math.min(1, (stateTimer - i * 2.0) / 0.8) : 1;
+    const fadeOut = i < currentText - 2 ? Math.max(0.2, 1 - (currentText - i) * 0.2) : 1;
+    ctx.globalAlpha = Math.max(0, fadeIn * fadeOut);
+    ctx.fillStyle = texts[i].color;
+    ctx.font = i === 7 ? 'bold 20px monospace' : '16px monospace';
+    ctx.fillText(texts[i].text, CW / 2, 110 + i * 38);
+  }
+  ctx.globalAlpha = 1;
+
+  // Progress dots
+  ctx.fillStyle = '#333';
+  for (let i = 0; i < texts.length; i++) {
+    ctx.fillStyle = i <= currentText ? '#886644' : '#333';
+    ctx.beginPath();
+    ctx.arc(CW / 2 - (texts.length * 6) + i * 12, CH - 90, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Skip hint - always visible
+  ctx.fillStyle = '#554433';
+  ctx.font = '11px monospace';
+  ctx.fillText('Press ENTER, SPACE or ESC to skip', CW / 2, CH - 30);
+
+  // Allow skip at any time
+  if (keys['enter'] || keys['escape'] || keys[' '] || mouse.clicked) {
+    keys['enter'] = false; keys['escape'] = false; keys[' '] = false; mouse.clicked = false;
+    gameState = STATE.TUTORIAL;
+    player.tutorialStep = 0;
+    loadMap('tutorial');
+    player.hasPickaxe = true;
+  }
+}
+
+// ==================== TUTORIAL INTERATIVO ====================
+const TUTORIAL_STEPS = [
+  {
+    msg: 'Welcome to the Abyss of Ashes! Use W A S D to move.',
+    check: () => keys['w']||keys['a']||keys['s']||keys['d'],
+    hint: 'WASD = Move',
+  },
+  {
+    msg: 'Great! See the BONFIRE glowing near you. Go to it!',
+    check: () => Math.hypot(player.x-15, player.y-17) < 2,
+    hint: 'Follow the circle',
+    arrow: { x:15, y:17 },
+  },
+  {
+    msg: 'Press F near the bonfire to rest and save your progress.',
+    check: () => false, // advances manually when leaving bonfire
+    hint: 'F = Interact',
+    waitBonfire: true,
+    arrow: { x:15, y:17 },
+  },
+  {
+    msg: 'Bonfires heal and save! Follow the CORRIDOR NORTH (W) to the glowing CHEST. Open with F.',
+    check: () => player.weapon !== null,
+    hint: 'W = North, F = Open chest',
+    arrow: { x:15, y:4 },
+  },
+  {
+    msg: 'You have a weapon! Click MOUSE or press SPACE to attack.',
+    check: () => player.attacking,
+    hint: 'Mouse / Space = Attack',
+  },
+  {
+    msg: 'Press SHIFT to dodge! You are INVINCIBLE during the dodge.',
+    check: () => player.dodging || player.dodgeCooldown > 0,
+    hint: 'Shift = Dodge',
+  },
+  {
+    msg: 'Skeletons appeared in the WEST ROOM! Go LEFT and defeat them!',
+    check: () => enemies.length === 0,
+    hint: 'Defeat them all!',
+    arrow: { x:4, y:12 },
+    onEnter: () => {
+      spawnEnemy('skeleton', 4, 12);
+      spawnEnemy('skeleton', 5, 14);
+    },
+  },
+  {
+    msg: 'Excellent! See the GLOWING ROCKS in the chest room. Go there and press E to mine.',
+    check: () => player.inventory.some(i => i.type==='ore'),
+    hint: 'E = Mine',
+    arrow: { x:8, y:5 },
+  },
+  {
+    msg: 'Perfect! You are ready. Go SOUTH to the GREEN EXIT to explore the world!',
+    check: () => player.currentMap !== 'tutorial',
+    hint: 'Go down (S) to the green exit',
+    arrow: { x:15, y:20 },
+    final: true,
+  },
+];
+
+function drawTutorialOverlay() {
+  const step = TUTORIAL_STEPS[player.tutorialStep];
+  if (!step) return;
+
+  // Tutorial box at top - refined styling
+  const boxW = 680, boxH = 85;
+  const boxX = CW / 2 - boxW / 2, boxY = 8;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(boxX + 3, boxY + 3, boxW, boxH);
+
+  // Background
+  const tutBg = ctx.createLinearGradient(boxX, boxY, boxX, boxY + boxH);
+  tutBg.addColorStop(0, 'rgba(20,15,10,0.92)');
+  tutBg.addColorStop(1, 'rgba(15,10,8,0.92)');
+  ctx.fillStyle = tutBg;
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+
+  // Border
+  ctx.strokeStyle = '#6a5530'; ctx.lineWidth = 2;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = '#3a2a15'; ctx.lineWidth = 1;
+  ctx.strokeRect(boxX + 3, boxY + 3, boxW - 6, boxH - 6);
+
+  // Step indicator and progress bar
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#aa8844'; ctx.font = 'bold 11px monospace';
+  ctx.fillText('TUTORIAL', boxX + 12, boxY + 18);
+  // Progress dots
+  for (let i = 0; i < TUTORIAL_STEPS.length; i++) {
+    ctx.fillStyle = i < player.tutorialStep ? '#aa8844' : i === player.tutorialStep ? '#ffcc55' : '#332a20';
+    ctx.beginPath();
+    ctx.arc(boxX + 95 + i * 14, boxY + 14, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Main message
+  ctx.fillStyle = '#eeddcc'; ctx.font = '14px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(step.msg, CW / 2, boxY + 45);
+
+  // Key hint - blinking
+  ctx.fillStyle = '#ddbb66'; ctx.font = 'bold 12px monospace';
+  const blink = Math.sin(Date.now() / 300) > 0;
+  if (blink) ctx.fillText('[ ' + step.hint + ' ]', CW / 2, boxY + 70);
+
+  // Arrow pointing to objective
+  if (step.arrow) {
+    drawArrowTo(step.arrow.x, step.arrow.y, step.final ? '#44ff44' : '#ddaa44');
+  }
+}
+
+function drawArrowTo(tx, ty, color) {
+  const px = player.x*TILE*SCALE - camera.x + TILE*SCALE/2;
+  const py = player.y*TILE*SCALE - camera.y + TILE*SCALE/2;
+  const ax = tx*TILE*SCALE - camera.x + TILE*SCALE/2;
+  const ay = ty*TILE*SCALE - camera.y + TILE*SCALE/2;
+  const angle = Math.atan2(ay-py, ax-px);
+  const dist = Math.min(60, Math.hypot(ax-px, ay-py)*0.3);
+  const tipX = px + Math.cos(angle)*dist;
+  const tipY = py + Math.sin(angle)*dist;
+
+  // Arrow line from player toward target
+  ctx.strokeStyle = color; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(px+Math.cos(angle)*25, py+Math.sin(angle)*25);
+  ctx.lineTo(tipX, tipY); ctx.stroke();
+  // Arrow head
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX-Math.cos(angle-0.4)*12, tipY-Math.sin(angle-0.4)*12);
+  ctx.lineTo(tipX-Math.cos(angle+0.4)*12, tipY-Math.sin(angle+0.4)*12);
+  ctx.fill();
+
+  // Pulsing glow ring at target tile
+  const pulse = 0.5 + Math.sin(Date.now() / 300) * 0.5;
+  const r = TILE * SCALE * 0.7 + pulse * 6;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.4 + pulse * 0.4;
+  ctx.beginPath();
+  ctx.arc(ax, ay, r, 0, Math.PI * 2);
+  ctx.stroke();
+  // Inner glow
+  ctx.globalAlpha = 0.1 + pulse * 0.15;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(ax, ay, r * 0.7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Bouncing chevrons pointing down above target (if target on screen)
+  if (ax > 0 && ax < CW && ay > 0 && ay < CH) {
+    const bounce = Math.sin(Date.now() / 250) * 5;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.7;
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('v', ax, ay - TILE*SCALE - 8 + bounce);
+    ctx.globalAlpha = 1;
+  }
+}
+
+let lastTutorialStep = -1;
+let tutorialStepDelay = 0;
+function updateTutorial() {
+  const step = TUTORIAL_STEPS[player.tutorialStep];
+  if (!step) {
+    player.tutorialDone = true;
+    gameState = STATE.GAMEPLAY;
+    return;
+  }
+
+  // Chamar onEnter quando entrar num passo novo
+  if (player.tutorialStep !== lastTutorialStep) {
+    lastTutorialStep = player.tutorialStep;
+    tutorialStepDelay = 2.0;
+    if (step.onEnter) step.onEnter();
+  }
+
+  // Esperar delay antes de checar a condicao
+  if (tutorialStepDelay > 0) {
+    tutorialStepDelay -= dt;
+    return;
+  }
+
+  if (step.check()) {
+    player.tutorialStep++;
+    if (player.tutorialStep >= TUTORIAL_STEPS.length) {
+      player.tutorialDone = true;
+      gameState = STATE.GAMEPLAY;
+    }
+  }
+}
+
+function drawWeaponChoice() {
+  ctx.fillStyle = 'rgba(0,0,0,0.9)'; ctx.fillRect(0, 0, CW, CH);
+  ctx.textAlign = 'center';
+
+  // Title
+  ctx.fillStyle = '#ccaa55'; ctx.font = 'bold 22px monospace';
+  ctx.fillText('Choose your Weapon', CW / 2, 100);
+  ctx.fillStyle = '#5a4a30'; ctx.fillRect(CW / 2 - 120, 108, 240, 1);
+
+  // Sword panel
+  const swordX = CW / 2 - 220, panelY = 150, pw = 180, ph = 260;
+  ctx.fillStyle = 'rgba(30,30,50,0.6)';
+  ctx.fillRect(swordX, panelY, pw, ph);
+  ctx.strokeStyle = '#667799'; ctx.lineWidth = 2;
+  ctx.strokeRect(swordX, panelY, pw, ph);
+  // Sword drawing - large
+  ctx.save();
+  ctx.shadowColor = '#88aaee'; ctx.shadowBlur = 15;
+  ctx.fillStyle = '#99bbdd';
+  ctx.fillRect(swordX + pw / 2 - 4, panelY + 40, 8, 80); // blade
+  ctx.fillStyle = '#ccddff';
+  ctx.fillRect(swordX + pw / 2 - 2, panelY + 45, 4, 70); // blade highlight
+  ctx.fillStyle = '#8b7014';
+  ctx.fillRect(swordX + pw / 2 - 14, panelY + 120, 28, 8); // guard
+  ctx.fillStyle = '#6b5014';
+  ctx.fillRect(swordX + pw / 2 - 4, panelY + 128, 8, 20); // handle
+  ctx.fillStyle = '#aaa';
+  ctx.fillRect(swordX + pw / 2 - 5, panelY + 148, 10, 6); // pommel
+  ctx.restore();
+  ctx.fillStyle = '#bbccee'; ctx.font = 'bold 16px monospace';
+  ctx.fillText('Sword', swordX + pw / 2, panelY + 190);
+  ctx.fillStyle = '#778899'; ctx.font = '11px monospace';
+  ctx.fillText('Swift and', swordX + pw / 2, panelY + 215);
+  ctx.fillText('precise blade', swordX + pw / 2, panelY + 230);
+  ctx.fillStyle = '#aaccff'; ctx.font = 'bold 14px monospace';
+  ctx.fillText('[ 1 ]', swordX + pw / 2, panelY + ph - 10);
+
+  // Axe panel
+  const axeX = CW / 2 + 40;
+  ctx.fillStyle = 'rgba(40,30,20,0.6)';
+  ctx.fillRect(axeX, panelY, pw, ph);
+  ctx.strokeStyle = '#997755'; ctx.lineWidth = 2;
+  ctx.strokeRect(axeX, panelY, pw, ph);
+  // Axe drawing - large
+  ctx.save();
+  ctx.shadowColor = '#ddaa55'; ctx.shadowBlur = 15;
+  ctx.fillStyle = '#8b6914';
+  ctx.fillRect(axeX + pw / 2 - 3, panelY + 50, 6, 100); // handle
+  ctx.fillStyle = '#998877';
+  ctx.fillRect(axeX + pw / 2 - 20, panelY + 40, 30, 40); // blade left
+  ctx.fillStyle = '#aaa';
+  ctx.fillRect(axeX + pw / 2 - 18, panelY + 44, 26, 32); // blade inner
+  ctx.restore();
+  ctx.fillStyle = '#ccaa77'; ctx.font = 'bold 16px monospace';
+  ctx.fillText('Axe', axeX + pw / 2, panelY + 190);
+  ctx.fillStyle = '#887766'; ctx.font = '11px monospace';
+  ctx.fillText('Heavy and', axeX + pw / 2, panelY + 215);
+  ctx.fillText('powerful strike', axeX + pw / 2, panelY + 230);
+  ctx.fillStyle = '#ddaa66'; ctx.font = 'bold 14px monospace';
+  ctx.fillText('[ 2 ]', axeX + pw / 2, panelY + ph - 10);
+
+  // Note
+  ctx.fillStyle = '#555'; ctx.font = '11px monospace';
+  ctx.fillText('Both deal the same damage. The choice is purely cosmetic.', CW / 2, CH - 50);
+
+  if (keys['1']) { player.weapon = 'sword'; keys['1'] = false; gameState = STATE.GAMEPLAY; showDialog('You wield the Sword. May it guide your path.'); }
+  if (keys['2']) { player.weapon = 'axe'; keys['2'] = false; gameState = STATE.GAMEPLAY; showDialog('You wield the Axe. May it crush your enemies.'); }
+}
+
+function drawDialog() {
+  // Darken background
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, CW, CH);
+
+  // Dialog box - parchment style
+  const boxX = 40, boxY = CH - 150, boxW = CW - 80, boxH = 130;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(boxX + 4, boxY + 4, boxW, boxH);
+
+  // Parchment background
+  const parchGrad = ctx.createLinearGradient(boxX, boxY, boxX, boxY + boxH);
+  parchGrad.addColorStop(0, '#2a2218');
+  parchGrad.addColorStop(0.5, '#1e1812');
+  parchGrad.addColorStop(1, '#2a2218');
+  ctx.fillStyle = parchGrad;
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+
+  // Border - double line
+  ctx.strokeStyle = '#5a4a30'; ctx.lineWidth = 2;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = '#3a2a18'; ctx.lineWidth = 1;
+  ctx.strokeRect(boxX + 4, boxY + 4, boxW - 8, boxH - 8);
+
+  // Corner ornaments
+  const corners = [[boxX, boxY], [boxX + boxW, boxY], [boxX, boxY + boxH], [boxX + boxW, boxY + boxH]];
+  ctx.fillStyle = '#6a5530';
+  for (const [cx, cy] of corners) {
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(Math.PI / 4);
+    ctx.fillRect(-5, -5, 10, 10);
+    ctx.restore();
+  }
+
+  // Text
+  ctx.fillStyle = '#ddccaa'; ctx.font = '15px monospace'; ctx.textAlign = 'center';
+  const words = dialogText.split(' ');
+  let lines = ['']; let lineIdx = 0;
+  for (const w of words) {
+    if ((lines[lineIdx] + ' ' + w).length > 55) { lineIdx++; lines[lineIdx] = ''; }
+    lines[lineIdx] = (lines[lineIdx] + ' ' + w).trim();
+  }
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], CW / 2, boxY + 40 + i * 24);
+  }
+
+  // Continue prompt
+  const blink = Math.sin(Date.now() / 400) > 0;
+  if (blink) {
+    ctx.fillStyle = '#887755'; ctx.font = '11px monospace';
+    ctx.fillText('[ ENTER ]', CW / 2, boxY + boxH - 16);
+  }
+  // Small triangle indicator
+  ctx.fillStyle = '#887755';
+  const triY = boxY + boxH - 12 + Math.sin(Date.now() / 300) * 3;
+  ctx.beginPath();
+  ctx.moveTo(CW / 2 + 50, triY);
+  ctx.lineTo(CW / 2 + 45, triY - 4);
+  ctx.lineTo(CW / 2 + 55, triY - 4);
+  ctx.fill();
+
+  if (keys['enter']) { keys['enter'] = false; gameState = STATE.GAMEPLAY; if (dialogCallback) dialogCallback(); }
+}
+
+function drawShop() {
+  // Dark backdrop
+  const shopBg = ctx.createLinearGradient(0, 0, 0, CH);
+  shopBg.addColorStop(0, '#0a0808'); shopBg.addColorStop(0.5, '#141010'); shopBg.addColorStop(1, '#0a0808');
+  ctx.fillStyle = shopBg; ctx.fillRect(0, 0, CW, CH);
+
+  // NPC portrait area
+  ctx.fillStyle = 'rgba(40,30,20,0.6)';
+  ctx.fillRect(30, 30, 200, 80);
+  ctx.strokeStyle = '#5a4a30'; ctx.lineWidth = 1;
+  ctx.strokeRect(30, 30, 200, 80);
+  // NPC sprite
+  const priestFrame = Math.floor(Date.now() / 300) % 4;
+  const priestImg = images['priest_' + (priestFrame + 1)];
+  if (priestImg) ctx.drawImage(priestImg, 0, 0, 16, 16, 40, 40, 56, 56);
+  ctx.fillStyle = '#ccaa66'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('Ash Traveler', 105, 60);
+  ctx.fillStyle = '#887766'; ctx.font = '10px monospace';
+  ctx.fillText('"I bring wares from distant', 105, 78);
+  ctx.fillText(' lands..."', 105, 90);
+
+  // Ashes display - top right
+  ctx.fillStyle = 'rgba(40,30,20,0.6)';
+  ctx.fillRect(CW - 200, 30, 170, 36);
+  ctx.strokeStyle = '#5a4a30'; ctx.strokeRect(CW - 200, 30, 170, 36);
+  const coinImg = images['coin_' + (Math.floor(Date.now() / 200) % 4 + 1)];
+  if (coinImg) ctx.drawImage(coinImg, 0, 0, 16, 16, CW - 190, 36, 22, 22);
+  ctx.fillStyle = '#eebb44'; ctx.font = 'bold 16px monospace';
+  ctx.fillText(player.ashes + ' Ashes', CW - 162, 54);
+
+  // ---- SELL PANEL ----
+  ctx.fillStyle = 'rgba(30,22,15,0.7)';
+  ctx.fillRect(30, 130, CW / 2 - 50, CH - 200);
+  ctx.strokeStyle = '#4a3a25'; ctx.strokeRect(30, 130, CW / 2 - 50, CH - 200);
+  ctx.fillStyle = '#ccaa66'; ctx.font = 'bold 13px monospace';
+  ctx.fillText('SELL ORES', 40, 152);
+  ctx.fillStyle = '#4a3a25'; ctx.fillRect(40, 157, CW / 2 - 80, 1);
+
+  const ores = player.inventory.filter(i => i.type === 'ore');
+  const oreGroups = {};
+  for (const o of ores) {
+    if (!oreGroups[o.name]) oreGroups[o.name] = { count: 0, value: o.value, name: o.name };
+    oreGroups[o.name].count++;
+  }
+  const groups = Object.values(oreGroups);
+
+  if (groups.length === 0) {
+    ctx.fillStyle = '#555'; ctx.font = '12px monospace';
+    ctx.fillText('No ores.', 50, 185);
+  } else {
+    for (let i = 0; i < groups.length; i++) {
+      const g = groups[i];
+      const sel = i === shopPage;
+      const iy = 175 + i * 32;
+      if (sel) {
+        ctx.fillStyle = 'rgba(200,170,80,0.1)';
+        ctx.fillRect(35, iy - 12, CW / 2 - 60, 28);
+        ctx.strokeStyle = '#aa8844'; ctx.lineWidth = 1;
+        ctx.strokeRect(35, iy - 12, CW / 2 - 60, 28);
+      }
+      ctx.fillStyle = sel ? '#ffdd66' : '#998877';
+      ctx.font = sel ? 'bold 12px monospace' : '12px monospace';
+      ctx.fillText((sel ? '> ' : '  ') + g.name + '  x' + g.count, 50, iy);
+      ctx.fillStyle = sel ? '#eebb44' : '#776655'; ctx.textAlign = 'right';
+      ctx.fillText(g.value + ' ashes', CW / 2 - 30, iy);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  // ---- BUY PANEL ----
+  const buyX = CW / 2 + 10;
+  ctx.fillStyle = 'rgba(30,22,15,0.7)';
+  ctx.fillRect(buyX, 130, CW / 2 - 50, CH - 200);
+  ctx.strokeStyle = '#4a3a25'; ctx.strokeRect(buyX, 130, CW / 2 - 50, CH - 200);
+  ctx.fillStyle = '#66aa88'; ctx.font = 'bold 13px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('BUY', buyX + 10, 152);
+  ctx.fillStyle = '#3a4a3a'; ctx.fillRect(buyX + 10, 157, CW / 2 - 80, 1);
+
+  // Flask item
+  ctx.fillStyle = 'rgba(60,40,40,0.4)';
+  ctx.fillRect(buyX + 10, 168, CW / 2 - 70, 40);
+  ctx.strokeStyle = '#554433'; ctx.strokeRect(buyX + 10, 168, CW / 2 - 70, 40);
+  const flaskImg = images['flask_' + (Math.floor(Date.now() / 250) % 4 + 1)];
+  if (flaskImg) ctx.drawImage(flaskImg, 0, 0, 16, 16, buyX + 18, 174, 28, 28);
+  ctx.fillStyle = '#ddaaaa'; ctx.font = '12px monospace';
+  ctx.fillText('Life Flask', buyX + 52, 185);
+  ctx.fillStyle = '#aa8844'; ctx.font = '11px monospace';
+  ctx.fillText('Heals 20+ HP', buyX + 52, 199);
+  ctx.fillStyle = '#eebb44'; ctx.textAlign = 'right';
+  ctx.fillText('30 ashes [B]', buyX + CW / 2 - 66, 192);
+  ctx.textAlign = 'left';
+
+  // Controls bar at bottom
+  ctx.fillStyle = 'rgba(20,15,10,0.8)';
+  ctx.fillRect(0, CH - 50, CW, 50);
+  ctx.fillStyle = '#4a3a25'; ctx.fillRect(0, CH - 50, CW, 1);
+  ctx.font = '12px monospace'; ctx.textAlign = 'center';
+  ctx.fillStyle = '#887766';
+  ctx.fillText('UP/DOWN  Select  |  ENTER  Sell  |  B  Buy Flask  |  ESC  Exit', CW / 2, CH - 22);
+
+  if (keys['arrowup']) { keys['arrowup'] = false; shopPage = Math.max(0, shopPage - 1); }
+  if (keys['arrowdown']) { keys['arrowdown'] = false; shopPage = Math.min(groups.length - 1, shopPage + 1); }
+  if (keys['enter'] && groups.length > 0) {
+    keys['enter'] = false;
+    const g = groups[shopPage];
+    const idx = player.inventory.findIndex(i => i.name === g.name);
+    if (idx >= 0) {
+      player.inventory.splice(idx, 1);
+      player.ashes += g.value;
+      addFloatText(player.x, player.y, '+' + g.value + ' Ashes', '#ffaa44');
+    }
+  }
+  if (keys['b']) {
+    keys['b'] = false;
+    if (player.ashes >= 30) {
+      player.ashes -= 30;
+      player.inventory.push({ name: 'Life Flask', type: 'flask', value: 20 });
+      addFloatText(player.x, player.y, '+Flask', '#44ff44');
+    }
+  }
+  if (keys['escape']) { keys['escape'] = false; gameState = (!player.tutorialDone && player.currentMap === 'tutorial') ? STATE.TUTORIAL : STATE.GAMEPLAY; }
+}
+
+function drawBonfire() {
+  // Dark warm background
+  const bfBg = ctx.createRadialGradient(CW / 2, CH / 2 - 50, 50, CW / 2, CH / 2, CW * 0.7);
+  bfBg.addColorStop(0, '#1a1008');
+  bfBg.addColorStop(1, '#080505');
+  ctx.fillStyle = bfBg; ctx.fillRect(0, 0, CW, CH);
+
+  // Animated fire using fire_animation.png sprite
+  const fireImg = images['fire'];
+  const fireX = CW / 2, fireY = 130;
+  if (fireImg) {
+    const frame = Math.floor(Date.now() / 180) % 4;
+    // Row 2 (y=96) of fire_animation.png = large bonfire, each frame is 44x48
+    ctx.drawImage(fireImg, frame * 44, 96, 44, 48, fireX - 66, fireY - 72, 132, 144);
+  }
+  // Fire glow
+  ctx.save();
+  const glowR = 120;
+  const flicker = 1 + Math.sin(Date.now() / 200) * 0.08;
+  const glow = ctx.createRadialGradient(fireX, fireY + 10, 0, fireX, fireY + 10, glowR * flicker);
+  glow.addColorStop(0, 'rgba(255,140,40,0.12)');
+  glow.addColorStop(0.5, 'rgba(255,80,20,0.05)');
+  glow.addColorStop(1, 'rgba(255,60,10,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(fireX - glowR, fireY - glowR, glowR * 2, glowR * 2);
+  ctx.restore();
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#dda855'; ctx.font = 'bold 20px monospace';
+  ctx.fillText('Bonfire', CW / 2, 40);
+  ctx.fillStyle = '#88774488'; ctx.font = '11px monospace';
+  ctx.fillText('Health and Stamina restored', CW / 2, 58);
+
+  // Ashes display
+  const coinImg = images['coin_' + (Math.floor(Date.now() / 200) % 4 + 1)];
+  if (coinImg) ctx.drawImage(coinImg, 0, 0, 16, 16, CW / 2 - 70, 68, 18, 18);
+  ctx.fillStyle = '#eebb44'; ctx.font = 'bold 14px monospace';
+  ctx.fillText(player.ashes + ' Ashes', CW / 2 + 10, 83);
+
+  // ---- STATS PANEL ----
+  const panelX = CW / 2 - 280, panelY = CH / 2 - 40;
+  ctx.fillStyle = 'rgba(20,15,10,0.7)';
+  ctx.fillRect(panelX, panelY, 560, 190);
+  ctx.strokeStyle = '#4a3a20'; ctx.lineWidth = 1;
+  ctx.strokeRect(panelX, panelY, 560, 190);
+
+  ctx.fillStyle = '#aa8855'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('UPGRADE ATTRIBUTES', panelX + 15, panelY + 20);
+  ctx.fillStyle = '#3a2a15'; ctx.fillRect(panelX + 15, panelY + 25, 530, 1);
+
+  const stats = ['vitality', 'strength', 'dexterity', 'resistance'];
+  const statNames = ['Vitality', 'Strength', 'Dexterity', 'Resistance'];
+  const statDescs = ['+10 Health', '+2 Damage', '+Atk Speed', '-Damage Taken'];
+  const statIcons = ['+', '*', '>', '#'];
+  const statColors = ['#dd4444', '#ff8844', '#44bbdd', '#4488cc'];
+
+  for (let i = 0; i < stats.length; i++) {
+    const sel = i === bonfireMenu;
+    const cost = getLevelCost(stats[i]);
+    const canAfford = player.ashes >= cost;
+    const sy = panelY + 40 + i * 38;
+
+    // Selection highlight
+    if (sel) {
+      ctx.fillStyle = 'rgba(200,170,80,0.08)';
+      ctx.fillRect(panelX + 5, sy - 8, 550, 34);
+      ctx.strokeStyle = canAfford ? '#aa8844' : '#aa4444';
+      ctx.strokeRect(panelX + 5, sy - 8, 550, 34);
+    }
+
+    // Icon
+    ctx.fillStyle = sel ? statColors[i] : '#555';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText(statIcons[i], panelX + 20, sy + 12);
+
+    // Name
+    ctx.fillStyle = sel ? '#eeddcc' : '#777';
+    ctx.font = sel ? 'bold 14px monospace' : '13px monospace';
+    ctx.fillText(statNames[i], panelX + 45, sy + 12);
+
+    // Current value
+    ctx.fillStyle = sel ? '#ffffff' : '#999';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText(player.stats[stats[i]], panelX + 210, sy + 12);
+
+    // Arrow and new value on upgrade
+    if (sel && canAfford) {
+      ctx.fillStyle = '#888'; ctx.font = '12px monospace';
+      ctx.fillText('->', panelX + 240, sy + 12);
+      ctx.fillStyle = '#44dd66'; ctx.font = 'bold 16px monospace';
+      ctx.fillText(player.stats[stats[i]] + 1, panelX + 270, sy + 12);
+    }
+
+    // Description
+    ctx.fillStyle = sel ? '#998877' : '#555';
+    ctx.font = '11px monospace';
+    ctx.fillText(statDescs[i], panelX + 310, sy + 12);
+
+    // Cost
+    ctx.textAlign = 'right';
+    ctx.fillStyle = sel ? (canAfford ? '#eebb44' : '#cc4444') : '#555';
+    ctx.font = '12px monospace';
+    ctx.fillText(cost + ' ashes', panelX + 545, sy + 12);
+    ctx.textAlign = 'left';
+  }
+
+  // ---- CONTROLS BAR ----
+  ctx.fillStyle = 'rgba(20,15,10,0.8)';
+  ctx.fillRect(0, CH - 50, CW, 50);
+  ctx.fillStyle = '#3a2a15'; ctx.fillRect(0, CH - 50, CW, 1);
+  ctx.textAlign = 'center'; ctx.font = '12px monospace'; ctx.fillStyle = '#887766';
+  ctx.fillText('UP/DOWN  Select  |  ENTER  Upgrade  |  T  Travel  |  ESC  Exit', CW / 2, CH - 22);
+
+  if (keys['arrowup']) { keys['arrowup'] = false; bonfireMenu = Math.max(0, bonfireMenu - 1); }
+  if (keys['arrowdown']) { keys['arrowdown'] = false; bonfireMenu = Math.min(3, bonfireMenu + 1); }
+  if (keys['enter']) {
+    keys['enter'] = false;
+    const cost = getLevelCost(stats[bonfireMenu]);
+    if (player.ashes >= cost) {
+      const _stat = stats[bonfireMenu];
+      showMathChallenge(() => { levelUp(_stat); gameState = STATE.BONFIRE; });
+    }
+  }
+  if (keys['escape']) {
+    keys['escape'] = false;
+    if (!player.tutorialDone && player.tutorialStep === 2) player.tutorialStep = 3;
+    gameState = (!player.tutorialDone && player.currentMap === 'tutorial') ? STATE.TUTORIAL : STATE.GAMEPLAY;
+  }
+  if (keys['t']) {
+    keys['t'] = false;
+    // Only travel to maps with bonfires that you've visited
+    const canTravel = Object.keys(maps).filter(k => maps[k].bonfires && maps[k].bonfires.length > 0 && (visitedMaps.has(k) || k === 'tutorial'));
+    if (canTravel.length > 1) {
+      const currentIdx = canTravel.indexOf(player.currentMap);
+      const nextMap = canTravel[(currentIdx + 1) % canTravel.length];
+      const bf = maps[nextMap].bonfires[0];
+      loadMap(nextMap, bf.x, bf.y);
+      player.lastBonfire = { map: nextMap, x: bf.x, y: bf.y };
+      gameState = (!player.tutorialDone && player.currentMap === 'tutorial') ? STATE.TUTORIAL : STATE.GAMEPLAY;
+    }
+  }
+}
+
+// ==================== PAUSE MENU ====================
+function drawPause() {
+  // Draw game behind
+  const map = maps[player.currentMap];
+  updateCamera(player, map.width, map.height);
+  drawMap(); drawExits(); drawBonfires(); drawItems(); drawChests(); drawNPCs();
+  drawEnemies(); drawBosses(); drawPlayer(); drawLighting(); drawHUD();
+
+  // Dark overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, CW, CH);
+
+  // Panel
+  const pw = 320, ph = 300;
+  const px = CW / 2 - pw / 2, py = CW > 0 ? CH / 2 - ph / 2 - 20 : 100;
+
+  // Panel bg
+  ctx.fillStyle = 'rgba(15,12,8,0.95)';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.strokeStyle = '#6a5530'; ctx.lineWidth = 2;
+  ctx.strokeRect(px, py, pw, ph);
+  ctx.strokeStyle = '#3a2a15'; ctx.lineWidth = 1;
+  ctx.strokeRect(px + 4, py + 4, pw - 8, ph - 8);
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#dda855'; ctx.font = 'bold 22px monospace';
+  ctx.fillText('PAUSED', CW / 2, py + 40);
+  ctx.fillStyle = '#4a3a20'; ctx.fillRect(CW / 2 - 60, py + 48, 120, 1);
+
+  // Menu options
+  const options = ['Continue', 'Controls', 'Back to Title'];
+  const optDescs = ['Return to game', 'View key bindings', 'Exit to title screen'];
+  for (let i = 0; i < options.length; i++) {
+    const oy = py + 80 + i * 55;
+    const sel = i === pauseMenu;
+    if (sel) {
+      ctx.fillStyle = 'rgba(200,170,80,0.1)';
+      ctx.fillRect(px + 15, oy - 8, pw - 30, 42);
+      ctx.strokeStyle = '#aa8844'; ctx.lineWidth = 1;
+      ctx.strokeRect(px + 15, oy - 8, pw - 30, 42);
+    }
+    ctx.fillStyle = sel ? '#ffddaa' : '#887766';
+    ctx.font = sel ? 'bold 16px monospace' : '15px monospace';
+    ctx.fillText(options[i], CW / 2, oy + 12);
+    ctx.fillStyle = sel ? '#998866' : '#554433';
+    ctx.font = '10px monospace';
+    ctx.fillText(optDescs[i], CW / 2, oy + 28);
+  }
+
+  // Controls panel (shows when option 1 selected)
+  if (pauseMenu === 1) {
+    const cy = py + ph + 10;
+    ctx.fillStyle = 'rgba(15,12,8,0.95)';
+    ctx.fillRect(px, cy, pw, 190);
+    ctx.strokeStyle = '#4a3a20'; ctx.lineWidth = 1;
+    ctx.strokeRect(px, cy, pw, 190);
+    ctx.textAlign = 'left'; ctx.font = '12px monospace';
+    const controls = [
+      ['WASD', 'Move'],
+      ['MOUSE / SPACE', 'Attack'],
+      ['SHIFT', 'Dodge (invincible)'],
+      ['F', 'Interact (NPC, chest, bonfire)'],
+      ['E', 'Mine (near ore)'],
+      ['Q', 'Use healing flask'],
+      ['ESC', 'Pause / Unpause'],
+    ];
+    for (let i = 0; i < controls.length; i++) {
+      const ky = cy + 20 + i * 24;
+      ctx.fillStyle = '#ddaa55'; ctx.fillText(controls[i][0], px + 20, ky);
+      ctx.fillStyle = '#bbaa88'; ctx.fillText(controls[i][1], px + 175, ky);
+    }
+  }
+
+  // Bottom hint
+  ctx.textAlign = 'center'; ctx.font = '11px monospace';
+  ctx.fillStyle = '#665544';
+  ctx.fillText('UP/DOWN Select  |  ENTER Confirm  |  ESC Close', CW / 2, py + ph - 15);
+
+  // Input
+  if (keys['arrowup']) { keys['arrowup'] = false; pauseMenu = (pauseMenu - 1 + 3) % 3; }
+  if (keys['arrowdown']) { keys['arrowdown'] = false; pauseMenu = (pauseMenu + 1) % 3; }
+  if (keys['w']) { keys['w'] = false; pauseMenu = (pauseMenu - 1 + 3) % 3; }
+  if (keys['s']) { keys['s'] = false; pauseMenu = (pauseMenu + 1) % 3; }
+  if (keys['escape']) {
+    keys['escape'] = false;
+    gameState = pausePrevState;
+  }
+  if (keys['enter'] || mouse.clicked) {
+    keys['enter'] = false; mouse.clicked = false;
+    if (pauseMenu === 0) {
+      gameState = pausePrevState;
+    } else if (pauseMenu === 2) {
+      gameState = STATE.TITLE;
+    }
+    // pauseMenu === 1 (Controls) just stays on pause showing controls
+  }
+}
+
+function drawBossIntro() {
+  stateTimer -= dt;
+  const progress = Math.min(1, (2 - stateTimer) / 2);
+
+  // Red vignette
+  ctx.fillStyle = `rgba(40,0,0,${progress * 0.6})`;
+  ctx.fillRect(0, 0, CW, CH);
+
+  // Letterbox bars sliding in
+  const barH = 60 * progress;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, CW, barH);
+  ctx.fillRect(0, CH - barH, CW, barH);
+
+  if (bosses.length > 0) {
+    ctx.textAlign = 'center';
+    // Boss name with dramatic glow
+    ctx.save();
+    ctx.shadowColor = '#ff2200'; ctx.shadowBlur = 30 * progress;
+    ctx.fillStyle = `rgba(255,60,20,${progress})`;
+    ctx.font = 'bold 32px monospace';
+    ctx.fillText(bosses[0].name, CW / 2, CH / 2 - 10);
+    ctx.restore();
+
+    // Subtitle - boss-specific dialogue
+    const bossIntroLines = {
+      ashWastes: ['"These ashes are MINE to guard!"', '"The city fell, but I will not."'],
+      boneCaverns: ['"Join the bones of those who failed..."', '"I promised I would never leave this post."'],
+      cursedGrounds: ['"The cure... never... came..."', '"Let the poison take you as it took me."'],
+      fireDepths: ['"BURN as this world burned!"', '"I cannot stop. I do not know how."'],
+      shadowRuins: ['"The knowledge shall not be stolen!"', '"Veyra swore to protect these pages. I am her oath."'],
+      dragonLair: ['"You dare enter MY lair?!"', '"He left me here. Alone. For a THOUSAND years."'],
+    };
+    const introLines = bossIntroLines[player.currentMap] || ['Prepare for combat!'];
+    ctx.fillStyle = `rgba(170,100,60,${Math.max(0, progress - 0.3)})`;
+    ctx.font = '14px monospace';
+    for (let li = 0; li < introLines.length; li++) {
+      ctx.fillText(introLines[li], CW / 2, CH / 2 + 30 + li * 22);
+    }
+
+    // Red lines
+    ctx.strokeStyle = `rgba(200,50,20,${progress * 0.5})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(CW / 2 - 200 * progress, CH / 2 + 10);
+    ctx.lineTo(CW / 2 + 200 * progress, CH / 2 + 10);
+    ctx.stroke();
+  }
+
+  if (stateTimer <= 0) { gameState = (!player.tutorialDone && player.currentMap === 'tutorial') ? STATE.TUTORIAL : STATE.GAMEPLAY; }
+}
+
+function drawGameOver() {
+  // Red-black radial gradient
+  const deathBg = ctx.createRadialGradient(CW / 2, CH / 2, 50, CW / 2, CH / 2, CW * 0.6);
+  deathBg.addColorStop(0, '#1a0505');
+  deathBg.addColorStop(1, '#080000');
+  ctx.fillStyle = deathBg; ctx.fillRect(0, 0, CW, CH);
+
+  // Red vignette
+  const vig = ctx.createRadialGradient(CW / 2, CH / 2, CW * 0.2, CW / 2, CH / 2, CW * 0.6);
+  vig.addColorStop(0, 'rgba(120,0,0,0)');
+  vig.addColorStop(1, 'rgba(120,0,0,0.3)');
+  ctx.fillStyle = vig; ctx.fillRect(0, 0, CW, CH);
+
+  // Blood drip particles
+  for (let i = 0; i < 15; i++) {
+    const px = (i * 67 + 50) % CW;
+    const py = ((Date.now() / 20 + i * 43) % (CH + 20)) - 10;
+    ctx.fillStyle = `rgba(150,20,20,${0.1 + (i % 3) * 0.05})`;
+    ctx.fillRect(px, py, 2, 4 + i % 3);
+  }
+
+  ctx.textAlign = 'center';
+  // Death text with glow
+  ctx.save();
+  ctx.shadowColor = '#cc0000'; ctx.shadowBlur = 30;
+  ctx.fillStyle = '#cc2222'; ctx.font = 'bold 40px monospace';
+  ctx.fillText('YOU DIED', CW / 2, CH / 2 - 30);
+  ctx.restore();
+
+  // Decorative line
+  ctx.strokeStyle = '#4a1111'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(CW / 2 - 180, CH / 2 - 5);
+  ctx.lineTo(CW / 2 + 180, CH / 2 - 5);
+  ctx.stroke();
+
+  ctx.fillStyle = '#885544'; ctx.font = '14px monospace';
+  ctx.fillText('Lost ' + Math.floor(player.ashes * 0.3) + ' ashes', CW / 2, CH / 2 + 25);
+
+  const blink = Math.sin(Date.now() / 500) > 0;
+  if (blink) {
+    ctx.fillStyle = '#776655'; ctx.font = '13px monospace';
+    ctx.fillText('[ ENTER ] Respawn at bonfire', CW / 2, CH / 2 + 70);
+  }
+  if (keys['enter']) { keys['enter'] = false; respawnPlayer(); }
+}
+
+// ==================== CUTSCENE: MATERIA NEUTRA ====================
+function drawMatterCutscene() {
+  matterCutsceneTimer -= 0.016;
+  const t = 5.0 - matterCutsceneTimer; // tempo decorrido (0 a 5)
+
+  // Fase 1 (0-1s): Tela escurece
+  // Fase 2 (1-3s): Materia brilha no centro
+  // Fase 3 (3-4.5s): Texto aparece
+  // Fase 4 (4.5-5s): Fade out
+
+  // Fundo preto com fade in
+  const fadeIn = Math.min(1, t / 0.8);
+  ctx.fillStyle = `rgba(0,0,0,${fadeIn})`;
+  ctx.fillRect(0, 0, CW, CH);
+
+  if (t > 0.5) {
+    // Materia neutra no centro - esfera brilhante
+    const centerX = CW/2;
+    const centerY = CH/2;
+    const pulse = 1 + Math.sin(t * 4) * 0.15;
+    const size = Math.min(1, (t-0.5)/1.0) * 40 * pulse;
+
+    // Glow externo grande
+    ctx.save();
+    const glowR = size * 4;
+    const glow = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, glowR);
+    glow.addColorStop(0, 'rgba(200,220,255,0.4)');
+    glow.addColorStop(0.3, 'rgba(150,180,255,0.2)');
+    glow.addColorStop(1, 'rgba(100,130,255,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(centerX-glowR, centerY-glowR, glowR*2, glowR*2);
+
+    // Raios de luz girando
+    for (let i = 0; i < 8; i++) {
+      const angle = t * 0.8 + i * Math.PI/4;
+      const len = size * 3 + Math.sin(t*3+i)*20;
+      ctx.strokeStyle = `rgba(200,220,255,${0.15 + Math.sin(t*2+i)*0.1})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(centerX + Math.cos(angle)*len, centerY + Math.sin(angle)*len);
+      ctx.stroke();
+    }
+
+    // Particulas orbitando
+    for (let i = 0; i < 20; i++) {
+      const angle = t * 1.5 + i * Math.PI/10;
+      const dist = size * 1.5 + Math.sin(t*2+i*0.7)*15;
+      const px = centerX + Math.cos(angle)*dist;
+      const py = centerY + Math.sin(angle)*dist*0.6;
+      const psize = 2 + Math.sin(t*3+i)*1.5;
+      ctx.fillStyle = `rgba(255,255,255,${0.4+Math.sin(t*4+i)*0.3})`;
+      ctx.fillRect(px-psize/2, py-psize/2, psize, psize);
+    }
+
+    // Esfera central
+    const sphereGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, size);
+    sphereGrad.addColorStop(0, '#ffffff');
+    sphereGrad.addColorStop(0.3, '#ddeeff');
+    sphereGrad.addColorStop(0.7, '#8899cc');
+    sphereGrad.addColorStop(1, 'rgba(80,100,180,0)');
+    ctx.fillStyle = sphereGrad;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, size, 0, Math.PI*2);
+    ctx.fill();
+
+    // Brilho central
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(centerX-size*0.2, centerY-size*0.2, size*0.25, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Textos
+  ctx.textAlign = 'center';
+  if (t > 1.5 && t < 4.8) {
+    const textAlpha = Math.min(1, (t-1.5)/0.5) * (t < 4.3 ? 1 : Math.max(0, (4.8-t)/0.5));
+    ctx.globalAlpha = textAlpha;
+
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 28px monospace';
+    ctx.fillText('NEUTRAL MATTER', CW/2, 100);
+
+    ctx.fillStyle = '#aabbdd'; ctx.font = '18px monospace';
+    ctx.fillText('Fragment '+(matterCutsceneIndex+1)+' of 9', CW/2, 140);
+
+    ctx.fillStyle = '#ffcc44'; ctx.font = 'bold 20px monospace';
+    ctx.fillText(player.matterCount + ' / 9 collected', CW/2, CH-100);
+
+    if (player.matterCount >= 9) {
+      ctx.fillStyle = '#44ff44'; ctx.font = '16px monospace';
+      ctx.fillText('All parts gathered! Find the Smith!', CW/2, CH-65);
+    } else {
+      ctx.fillStyle = '#888888'; ctx.font = '14px monospace';
+      ctx.fillText('Defeat the Bosses to find the remaining fragments.', CW/2, CH-65);
+    }
+
+    // Barra de progresso das materias
+    const barW = 300, barH = 12;
+    const barX = CW/2 - barW/2, barY = CH-45;
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(barX, barY, barW, barH);
+    // Segmentos individuais
+    for (let i = 0; i < 9; i++) {
+      const segX = barX + i*(barW/9) + 1;
+      const segW = barW/9 - 2;
+      ctx.fillStyle = player.matterPieces[i] ? '#aaccff' : 'rgba(255,255,255,0.08)';
+      ctx.fillRect(segX, barY+1, segW, barH-2);
+    }
+
+    ctx.globalAlpha = 1;
+  }
+
+  // Fade out no final
+  if (t > 4.5) {
+    const fadeOut = (t - 4.5) / 0.5;
+    ctx.fillStyle = `rgba(0,0,0,${fadeOut})`;
+    ctx.fillRect(0, 0, CW, CH);
+  }
+
+  // Acabou a cutscene
+  if (matterCutsceneTimer <= 0) {
+    gameState = (!player.tutorialDone && player.currentMap==='tutorial') ? STATE.TUTORIAL : STATE.GAMEPLAY;
+  }
+}
+
+function drawCutscene() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CW, CH);
+  cutsceneTimer -= 0.016;
+
+  // Hollow Knight style weapon upgrade scene
+  ctx.textAlign = 'center';
+
+  // Weapon in center
+  const weaponY = CH/2 + Math.sin(Date.now()/500)*10;
+  ctx.fillStyle = player.weapon==='sword' ? '#aaccff' : '#bb8844';
+  if (player.weapon === 'sword') {
+    ctx.fillRect(CW/2-4, weaponY-30, 8, 60);
+    ctx.fillRect(CW/2-16, weaponY-4, 32, 8);
+  } else {
+    ctx.fillRect(CW/2-3, weaponY-25, 6, 50);
+    ctx.fillRect(CW/2-12, weaponY-25, 24, 20);
+  }
+
+  // Glowing particles
+  for (let i = 0; i < 20; i++) {
+    const angle = (Date.now()/1000 + i*0.314) ;
+    const dist = 50 + Math.sin(Date.now()/500+i)*20;
+    const px = CW/2 + Math.cos(angle)*dist;
+    const py = weaponY + Math.sin(angle)*dist*0.5;
+    ctx.fillStyle = `rgba(255,255,255,${0.3+Math.sin(i+Date.now()/200)*0.3})`;
+    ctx.fillRect(px-2, py-2, 4, 4);
+  }
+
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 20px monospace';
+  ctx.fillText('The Neutral Matter fuses...', CW/2, 80);
+  ctx.fillStyle = '#ffcc44'; ctx.font = '16px monospace';
+  const wname = player.weapon==='sword'?'Sword':'Axe';
+  ctx.fillText(wname+' +'+player.weaponLevel, CW/2, CH-80);
+
+  if (cutsceneTimer <= 0) { gameState = (!player.tutorialDone && player.currentMap==='tutorial') ? STATE.TUTORIAL : STATE.GAMEPLAY; }
+}
+
+function drawWin() {
+  // Dark to gold gradient
+  const winBg = ctx.createLinearGradient(0, 0, 0, CH);
+  winBg.addColorStop(0, '#0a0805');
+  winBg.addColorStop(0.5, '#1a1408');
+  winBg.addColorStop(1, '#0a0805');
+  ctx.fillStyle = winBg; ctx.fillRect(0, 0, CW, CH);
+
+  // Gold particle celebration
+  for (let i = 0; i < 60; i++) {
+    const seed = i * 73.7;
+    const px = (seed * 5 + Date.now() / (25 + i % 8)) % CW;
+    const py = CH - ((Date.now() / (18 + i % 12) + seed * 2.5) % (CH + 30));
+    const sz = 1 + (i % 3);
+    const hue = 35 + (i * 7) % 30;
+    ctx.fillStyle = `hsla(${hue},80%,60%,${0.15 + Math.sin(Date.now() / 400 + i) * 0.1})`;
+    ctx.fillRect(px, py, sz, sz);
+  }
+
+  ctx.textAlign = 'center';
+
+  // Victory title with golden glow
+  ctx.save();
+  ctx.shadowColor = '#ffaa22'; ctx.shadowBlur = 40;
+  ctx.fillStyle = '#ddaa33'; ctx.font = 'bold 44px monospace';
+  ctx.fillText('VICTORY!', CW / 2, CH / 2 - 100);
+  ctx.restore();
+  ctx.fillStyle = '#ffcc55'; ctx.font = 'bold 44px monospace';
+  ctx.globalAlpha = 0.3 + Math.sin(Date.now() / 800) * 0.15;
+  ctx.fillText('VICTORY!', CW / 2, CH / 2 - 101);
+  ctx.globalAlpha = 1;
+
+  // Decorative line
+  ctx.strokeStyle = '#5a4a20'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(CW / 2 - 200, CH / 2 - 70);
+  ctx.lineTo(CW / 2 + 200, CH / 2 - 70);
+  ctx.stroke();
+  ctx.fillStyle = '#aa8833'; ctx.save();
+  ctx.translate(CW / 2, CH / 2 - 70); ctx.rotate(Math.PI / 4);
+  ctx.fillRect(-4, -4, 8, 8); ctx.restore();
+
+  ctx.fillStyle = '#eeddcc'; ctx.font = '16px monospace';
+  ctx.fillText('Cindara, the Ash Dragon, has been freed.', CW / 2, CH / 2 - 80);
+
+  // Epilogue - scrolling text based on time
+  const winTime = Date.now() / 1000;
+  const epilogue = [
+    'With the divine weapon forged from Neutral Matter,',
+    'you did not destroy Cindara. You released her.',
+    '',
+    'She was never evil. She was the God\'s most faithful creation.',
+    'A guardian who waited a thousand years at the gate,',
+    'hoping her creator would return. He never did.',
+    'Loneliness became fire. Fire became the world\'s wound.',
+    '',
+    'But now, with the nine fragments reunited,',
+    'divine energy flows through the land once more.',
+    'The ashes begin to fade. Rain falls for the first time in centuries.',
+    'Grass sprouts where there was only destruction.',
+    'Children will play here again, someday.',
+    '',
+    'Far away, beyond the edges of this world,',
+    'the God watches. And for the first time in a thousand years...',
+    'he smiles.',
+    '',
+    'You did not just save a world. You gave it a second chance.',
+  ];
+  ctx.fillStyle = '#998877'; ctx.font = '13px monospace';
+  for (let i = 0; i < epilogue.length; i++) {
+    const lineAlpha = Math.min(1, Math.max(0, (winTime - 1 - i * 0.4) * 2));
+    ctx.fillStyle = epilogue[i] === '' ? 'transparent' : 'rgba(160,140,120,' + lineAlpha + ')';
+    ctx.fillText(epilogue[i], CW / 2, CH / 2 - 40 + i * 20);
+  }
+
+  // Stats
+  ctx.fillStyle = '#776655'; ctx.fillRect(CW / 2 - 150, CH / 2 + 220, 300, 1);
+  ctx.fillStyle = '#ccaa66'; ctx.font = '14px monospace';
+  ctx.fillText('Final Level: ' + player.level, CW / 2, CH / 2 + 245);
+  ctx.fillText('Bosses Defeated: ' + player.killedBosses.size + '/6', CW / 2, CH / 2 + 265);
+  ctx.fillText('Matter Collected: ' + player.matterCount + '/9', CW / 2, CH / 2 + 285);
+
+  ctx.fillStyle = '#ddccaa'; ctx.font = 'bold 16px monospace';
+  ctx.fillText('Thank you for playing!', CW / 2, CH / 2 + 310);
+
+  const blink = Math.sin(Date.now() / 500) > 0;
+  if (blink) {
+    ctx.fillStyle = '#665544'; ctx.font = '12px monospace';
+    ctx.fillText('[ ENTER ] Restart', CW / 2, CH - 30);
+  }
+  if (keys['enter']) { keys['enter'] = false; location.reload(); }
+}
+
+// ==================== MAIN GAME LOOP ====================
+let lastTime = 0;
+
+function gameLoop(time) {
+  dt = Math.min(0.05, (time - lastTime) / 1000);
+  lastTime = time;
+
+  ctx.clearRect(0, 0, CW, CH);
+
+  switch (gameState) {
+    case STATE.LOADING:
+      ctx.fillStyle = '#080508'; ctx.fillRect(0,0,CW,CH);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#665544'; ctx.font = '13px monospace';
+      ctx.fillText('Loading...', CW/2, CH/2 - 10);
+      // Loading bar
+      const loadProg = assetsLoaded / Math.max(1, assetsTotal);
+      ctx.fillStyle = '#1a1512'; ctx.fillRect(CW/2 - 120, CH/2 + 8, 240, 10);
+      const loadGrad = ctx.createLinearGradient(CW/2-120, 0, CW/2+120, 0);
+      loadGrad.addColorStop(0, '#aa5522'); loadGrad.addColorStop(1, '#dd7733');
+      ctx.fillStyle = loadGrad;
+      ctx.fillRect(CW/2 - 120, CH/2 + 8, 240 * loadProg, 10);
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(CW/2 - 120, CH/2 + 8, 240 * loadProg, 3);
+      ctx.fillStyle = '#444'; ctx.font = '10px monospace';
+      ctx.fillText(assetsLoaded + ' / ' + assetsTotal, CW/2, CH/2 + 32);
+      if (assetsLoaded >= assetsTotal) gameState = STATE.TITLE;
+      break;
+
+    case STATE.TITLE:
+      drawTitle();
+      break;
+
+    case STATE.INTRO:
+      drawIntro();
+      break;
+
+    case STATE.WEAPON_CHOICE:
+      drawWeaponChoice();
+      break;
+
+    case STATE.TUTORIAL:
+      // ESC -> Pause
+      if (keys['escape']) {
+        keys['escape'] = false;
+        pauseMenu = 0;
+        pausePrevState = STATE.TUTORIAL;
+        gameState = STATE.PAUSE;
+        break;
+      }
+      updateShake(dt);
+      updatePlayer(dt);
+      updateEnemies(dt);
+      updateBosses(dt);
+      updateParticles(dt);
+      updateFloatTexts(dt);
+      updateTutorial();
+      updateCamera(player, maps[player.currentMap].width, maps[player.currentMap].height);
+
+      drawMap();
+      drawExits();
+      drawBonfires();
+      drawItems();
+      drawChests();
+      drawNPCs();
+      drawEnemies();
+      drawBosses();
+      drawPlayer();
+      drawParticles();
+      drawFloatTexts();
+      drawLighting();
+      drawHUD();
+      drawTutorialOverlay();
+      break;
+
+    case STATE.GAMEPLAY:
+      // ESC -> Pause
+      if (keys['escape']) {
+        keys['escape'] = false;
+        pauseMenu = 0;
+        pausePrevState = STATE.GAMEPLAY;
+        gameState = STATE.PAUSE;
+        break;
+      }
+      // TAB -> toggle objective arrow
+      if (keys['tab']) {
+        keys['tab'] = false;
+        showObjectiveArrow = !showObjectiveArrow;
+        addFloatText(player.x, player.y, showObjectiveArrow ? 'Arrow ON' : 'Arrow OFF', '#aaaaaa');
+      }
+      // Story intro overlay
+      if (storyIntroActive) {
+        storyIntroTimer -= dt;
+        if (storyIntroTimer <= 0 || keys['f'] || keys['enter'] || mouse.clicked) {
+          storyIntroActive = false;
+          keys['f'] = false; keys['enter'] = false;
+        }
+      }
+      updateShake(dt);
+      if (!storyIntroActive) {
+        updatePlayer(dt);
+        updateEnemies(dt);
+        updateBosses(dt);
+      }
+      updateParticles(dt);
+      updateFloatTexts(dt);
+      updateCamera(player, maps[player.currentMap].width, maps[player.currentMap].height);
+
+      drawMap();
+      drawExits();
+      drawBonfires();
+      drawItems();
+      drawChests();
+      drawNPCs();
+      drawEnemies();
+      drawBosses();
+      drawPlayer();
+      drawParticles();
+      drawFloatTexts();
+      drawLighting();
+      drawHUD();
+      // Objective arrow
+      if (!storyIntroActive) {
+        const arrowTarget = getObjectiveArrowTarget();
+        if (arrowTarget) drawArrowTo(arrowTarget.x, arrowTarget.y, arrowTarget.color);
+      }
+      // Path hint text
+      if (pathHintTimer > 0) {
+        const hAlpha = Math.min(1, pathHintTimer < 1 ? pathHintTimer : 1);
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.font = 'italic 13px monospace';
+        ctx.fillStyle = 'rgba(180,160,130,' + hAlpha + ')';
+        ctx.fillText(pathHintText, CW / 2, CH - 20);
+        ctx.restore();
+        pathHintTimer -= dt;
+      }
+      // Story intro overlay
+      if (storyIntroActive) {
+        const alpha = Math.min(1, storyIntroTimer > 4 ? (5 - storyIntroTimer) : storyIntroTimer < 1 ? storyIntroTimer : 1);
+        ctx.fillStyle = 'rgba(0,0,0,' + (0.75 * alpha) + ')';
+        ctx.fillRect(0, 0, CW, CH);
+        // Letterbox
+        ctx.fillStyle = 'rgba(0,0,0,' + alpha + ')';
+        ctx.fillRect(0, 0, CW, 80); ctx.fillRect(0, CH - 80, CW, 80);
+        // Area name
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(200,170,100,' + alpha + ')';
+        ctx.font = 'bold 28px monospace';
+        ctx.fillText(maps[player.currentMap].name, CW / 2, 180);
+        // Decorative line
+        ctx.fillStyle = 'rgba(150,120,60,' + (alpha * 0.5) + ')';
+        ctx.fillRect(CW / 2 - 100, 190, 200, 1);
+        // Story lines
+        ctx.font = '13px monospace';
+        for (let i = 0; i < storyIntroLines.length; i++) {
+          ctx.fillStyle = 'rgba(200,190,170,' + alpha + ')';
+          ctx.fillText(storyIntroLines[i], CW / 2, 230 + i * 24);
+        }
+        // Skip hint
+        ctx.fillStyle = 'rgba(130,110,80,' + (alpha * (Math.sin(Date.now() / 400) * 0.3 + 0.7)) + ')';
+        ctx.font = '10px monospace';
+        ctx.fillText('Press F to continue', CW / 2, CH - 100);
+      }
+      break;
+
+    case STATE.DIALOG:
+      // Keep game visible behind dialog
+      updateCamera(player, maps[player.currentMap].width, maps[player.currentMap].height);
+      drawMap(); drawExits(); drawBonfires(); drawItems(); drawChests(); drawNPCs(); drawEnemies(); drawBosses(); drawPlayer();
+      drawLighting(); drawHUD();
+      drawDialog();
+      break;
+
+    case STATE.SHOP:
+      drawShop();
+      break;
+
+    case STATE.BONFIRE:
+      drawBonfire();
+      break;
+
+    case STATE.BOSS_INTRO:
+      updateCamera(player, maps[player.currentMap].width, maps[player.currentMap].height);
+      drawMap(); drawBonfires(); drawItems(); drawNPCs(); drawEnemies(); drawBosses(); drawPlayer();
+      drawLighting();
+      drawBossIntro();
+      break;
+
+    case STATE.GAME_OVER:
+      drawGameOver();
+      break;
+
+    case STATE.CUTSCENE:
+      drawCutscene();
+      break;
+
+    case STATE.MATTER_CUTSCENE:
+      drawMatterCutscene();
+      break;
+
+    case STATE.WIN:
+      drawWin();
+      break;
+
+    case STATE.PAUSE:
+      drawPause();
+      break;
+
+    case STATE.MATH:
+      updateMath();
+      drawMath();
+      break;
+  }
+
+  mouse.clicked = false;
+  requestAnimationFrame(gameLoop);
+}
+
+// ==================== INIT ====================
+function init() {
+  // Scale canvas to fit window
+  function resize() {
+    const ratio = CW / CH;
+    let w = window.innerWidth, h = window.innerHeight;
+    if (w/h > ratio) w = h * ratio; else h = w / ratio;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  loadAllAssets();
+  requestAnimationFrame(gameLoop);
+}
+
+init();
+</script>
+</body>
+</html>
