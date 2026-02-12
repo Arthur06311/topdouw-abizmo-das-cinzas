@@ -357,7 +357,7 @@ function getCurrentObjective() {
   if (!player.killedBosses.has('fireDepths')) return 'Survive the Fire Depths';
   if (!player.killedBosses.has('shadowRuins')) return 'Conquer the Shadow Ruins';
   if (player.matterCount >= 5 && !player.killedBosses.has('dragonLair')) return 'Face the Ash Dragon!';
-  return 'Collect more Neutral Matter (' + player.matterCount + '/9)';
+  return 'Collect more Neutral Matter (' + player.matterCount + '/5)';
 }
 
 const AREA_ORDER = ['tutorial','ashWastes','boneCaverns','cursedGrounds','fireDepths','shadowRuins','dragonLair'];
@@ -650,9 +650,9 @@ maps.boneCaverns = (function(){
   m.corridor(26,32,28,36,1);
   m.room(20,35,34,38,1,4); m.fill(21,36,33,37,1);
   m.fill(26,35,28,35,1); // open corridor into boss room
-  m.set(24,37,21); m.set(27,36,21); m.set(30,37,21); // spike traps
-  m.set(27,38,14); // boss door
+  m.set(24,37,21); m.set(30,37,21); // spike traps
   m.fill(26,38,28,38,1); m.set(27,38,11); // exit
+  m.set(27,36,14); // boss door (before exit)
   return {
     width:W, height:H, name:'Bone Caverns',
     startX:27, startY:4, tiles:m.t,
@@ -798,10 +798,10 @@ maps.fireDepths = (function(){
   m.corridor(20,22,24,22,13);
   m.set(18,26,21); m.set(22,25,21); m.set(26,26,21);
   m.set(20,28,21); m.set(24,28,21);
-  m.set(22,30,14); // boss door
   // Exit
-  m.fill(21,30,23,33,13); // connect boss door to exit
+  m.fill(21,30,23,33,13); // connect boss area to exit
   m.set(22,33,11);
+  m.set(22,30,14); // boss door (placed after fill)
   // Lava edges glow
   return {
     width:W, height:H, name:'Fire Depths',
@@ -866,8 +866,8 @@ maps.shadowRuins = (function(){
   m.set(22,22,25); // central lore
   // Boss approach (south)
   m.corridor(20,30,24,33,1); // extend corridor to exit row
-  m.set(22,33,14); // boss door
   m.fill(21,33,23,33,1); m.set(22,33,11); // exit
+  m.set(22,31,14); // boss door (in corridor, before exit)
   return {
     width:W, height:H, name:'Shadow Ruins',
     startX:22, startY:4, tiles:m.t,
@@ -904,6 +904,7 @@ maps.dragonLair = (function(){
   // Grand arena
   m.room(4,10,30,26,2,4); m.fill(5,11,29,25,2);
   m.corridor(16,8,18,10,2);
+  m.set(17,10,14); // boss door at arena entrance
   // Pillars around arena
   m.pillars(8,13,26,23,6,5);
   // Lava edges
@@ -949,7 +950,7 @@ const player = {
   weapon: null, // 'sword' or 'axe'
   hasPickaxe: false,
   inventory: [],
-  matterPieces: [false,false,false,false,false,false,false,false,false],
+  matterPieces: [false,false,false,false,false],
   matterCount: 0,
   weaponLevel: 0,
   attacking: false, attackTimer: 0, attackCooldown: 0,
@@ -3074,7 +3075,7 @@ function drawHUD() {
   // Matter pieces - 9 diamond indicators
   ctx.fillStyle = '#776655'; ctx.font = '10px monospace';
   ctx.fillText('Neutral Matter:', 12, 100);
-  for (let i = 0; i < 9; i++) {
+  for (let i = 0; i < 5; i++) {
     const mx = 120 + i * 13, my = 93;
     ctx.save();
     ctx.translate(mx + 4, my + 5);
@@ -4175,7 +4176,7 @@ function loadGame(slotIndex) {
   player.stats = { ...p.stats };
   player.weapon = p.weapon; player.hasPickaxe = p.hasPickaxe;
   player.inventory = [...(p.inventory || [])];
-  player.matterPieces = [...(p.matterPieces || [false,false,false,false,false,false,false,false,false])];
+  player.matterPieces = [...(p.matterPieces || [false,false,false,false,false])];
   player.matterCount = p.matterCount || 0;
   player.weaponLevel = p.weaponLevel || 0;
   player.currentMap = p.currentMap;
@@ -4775,10 +4776,6 @@ const MATTER_LORE = {
   2: '"The land\'s poison, purified into divine light..."',
   3: '"Fire tamed. The element remembers its purpose..."',
   4: '"Ancient knowledge given form. The pages sing..."',
-  5: '"A dragon\'s loneliness, transformed into hope..."',
-  6: '"Found in the depths, where light dares not reach..."',
-  7: '"Hidden by the God himself, waiting for the worthy..."',
-  8: '"The final piece. The weapon stirs with anticipation..."',
 };
 
 // ==================== CUTSCENE: MATERIA NEUTRA ====================
@@ -4939,7 +4936,7 @@ function drawMatterCutscene() {
         ctx.globalAlpha = countAlpha;
         ctx.textAlign = 'center';
         ctx.fillStyle = '#aabbdd'; ctx.font = 'bold 22px monospace';
-        ctx.fillText('Fragment ' + (matterCutsceneIndex + 1) + ' of 9', centerX, 170);
+        ctx.fillText('Fragment ' + (matterCutsceneIndex + 1) + ' of 5', centerX, 170);
         ctx.globalAlpha = 1;
       }
     }
@@ -4963,9 +4960,9 @@ function drawMatterCutscene() {
       const barX = centerX - barW / 2, barY = CH - 100;
       ctx.fillStyle = 'rgba(255,255,255,0.1)';
       ctx.fillRect(barX, barY, barW, barH);
-      for (let i = 0; i < 9; i++) {
-        const segX = barX + i * (barW / 9) + 1;
-        const segW = barW / 9 - 2;
+      for (let i = 0; i < 5; i++) {
+        const segX = barX + i * (barW / 5) + 1;
+        const segW = barW / 5 - 2;
         if (player.matterPieces[i]) {
           // Lit segment with glow
           ctx.fillStyle = '#aaccff';
@@ -4979,8 +4976,8 @@ function drawMatterCutscene() {
       }
       // Count text below bar
       ctx.fillStyle = '#ffcc44'; ctx.font = 'bold 16px monospace';
-      ctx.fillText(player.matterCount + ' / 9', centerX, barY + barH + 22);
-      if (player.matterCount >= 9) {
+      ctx.fillText(player.matterCount + ' / 5', centerX, barY + barH + 22);
+      if (player.matterCount >= 5) {
         ctx.fillStyle = '#44ff88'; ctx.font = '13px monospace';
         ctx.fillText('All fragments gathered! Find the Smith!', centerX, barY + barH + 42);
       }
@@ -5030,14 +5027,14 @@ function drawMatterCutscene() {
       const barX = centerX - barW / 2, barY = CH - 100;
       ctx.fillStyle = 'rgba(255,255,255,0.1)';
       ctx.fillRect(barX, barY, barW, barH);
-      for (let i = 0; i < 9; i++) {
-        const segX = barX + i * (barW / 9) + 1;
-        const segW = barW / 9 - 2;
+      for (let i = 0; i < 5; i++) {
+        const segX = barX + i * (barW / 5) + 1;
+        const segW = barW / 5 - 2;
         ctx.fillStyle = player.matterPieces[i] ? '#aaccff' : 'rgba(255,255,255,0.06)';
         ctx.fillRect(segX, barY + 1, segW, barH - 2);
       }
       ctx.fillStyle = '#ffcc44'; ctx.font = 'bold 16px monospace';
-      ctx.fillText(player.matterCount + ' / 9', centerX, barY + barH + 22);
+      ctx.fillText(player.matterCount + ' / 5', centerX, barY + barH + 22);
       ctx.globalAlpha = 1;
     }
 
@@ -5172,7 +5169,7 @@ function drawWin() {
   ctx.fillStyle = '#ccaa66'; ctx.font = '14px monospace';
   ctx.fillText('Final Level: ' + player.level, CW / 2, CH / 2 + 245);
   ctx.fillText('Bosses Defeated: ' + player.killedBosses.size + '/6', CW / 2, CH / 2 + 265);
-  ctx.fillText('Matter Collected: ' + player.matterCount + '/9', CW / 2, CH / 2 + 285);
+  ctx.fillText('Matter Collected: ' + player.matterCount + '/5', CW / 2, CH / 2 + 285);
 
   ctx.fillStyle = '#ddccaa'; ctx.font = 'bold 16px monospace';
   ctx.fillText('Thank you for playing!', CW / 2, CH / 2 + 310);
