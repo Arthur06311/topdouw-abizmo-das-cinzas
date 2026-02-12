@@ -34,7 +34,6 @@ function loadImg(name, src) {
 function loadAllAssets() {
   const base = '';
   loadImg('character', base+'dungeon-assets/2D Pixel Dungeon Asset Pack/character and tileset/Dungeon_Character.png');
-  loadImg('character2', base+'dungeon-assets/2D Pixel Dungeon Asset Pack/character and tileset/Dungeon_Character_2.png');
   loadImg('tileset', base+'dungeon-assets/2D Pixel Dungeon Asset Pack/character and tileset/Dungeon_Tileset.png');
   loadImg('wallsFloor', base+'free-dungeon-assets/PNG/walls_floor.png');
   loadImg('objects', base+'free-dungeon-assets/PNG/Objects.png');
@@ -83,6 +82,14 @@ const mouse = { x: 0, y: 0, down: false, clicked: false };
 document.addEventListener('keydown', e => {
   keys[e.key.toLowerCase()] = true;
   if (gameState === STATE.MATH) mathInputBuffer.push(e.key);
+  if (gameState === STATE.TEACHER_CONFIG) teacherInputBuffer.push(e.key);
+  if (gameState === STATE.SAVE_MENU) saveInputBuffer.push(e.key);
+  if (gameState === STATE.PAUSE && teacherPinCheckMode) teacherInputBuffer.push(e.key);
+  if (gameState === STATE.TITLE && e.key >= '0' && e.key <= '9') {
+    adminCodeBuffer += e.key;
+    if (adminCodeBuffer.length > 4) adminCodeBuffer = adminCodeBuffer.slice(-4);
+    if (adminCodeBuffer === '7777') { adminCodeBuffer = ''; activateAdmin(); }
+  }
   e.preventDefault();
 });
 document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
@@ -91,7 +98,7 @@ canvas.addEventListener('mousedown', () => { mouse.down = true; mouse.clicked = 
 canvas.addEventListener('mouseup', () => { mouse.down = false; });
 
 // ==================== GAME STATE ====================
-const STATE = { LOADING:'loading', TITLE:'title', INTRO:'intro', TUTORIAL:'tutorial', WEAPON_CHOICE:'weapon_choice', GAMEPLAY:'gameplay', DIALOG:'dialog', SHOP:'shop', BONFIRE:'bonfire', BOSS_INTRO:'boss_intro', GAME_OVER:'game_over', CUTSCENE:'cutscene', MATTER_CUTSCENE:'matter_cutscene', WIN:'win', PAUSE:'pause', MATH:'math' };
+const STATE = { LOADING:'loading', TITLE:'title', INTRO:'intro', TUTORIAL:'tutorial', WEAPON_CHOICE:'weapon_choice', GAMEPLAY:'gameplay', DIALOG:'dialog', SHOP:'shop', BONFIRE:'bonfire', BOSS_INTRO:'boss_intro', BOSS_DEATH:'boss_death', GAME_OVER:'game_over', CUTSCENE:'cutscene', MATTER_CUTSCENE:'matter_cutscene', WIN:'win', PAUSE:'pause', MATH:'math', TEACHER_CONFIG:'teacher_config', SAVE_MENU:'save_menu' };
 let gameState = STATE.LOADING;
 let stateTimer = 0;
 let dialogText = '';
@@ -102,6 +109,8 @@ let shopPage = 0;
 let cutsceneTimer = 0;
 let matterCutsceneTimer = 0;
 let matterCutsceneIndex = 0;
+let bossDeathTimer = 0;
+let bossDeathData = null; // { x, y, color, name, mapName, matterIndex, isFinal, ashReward }
 let pauseMenu = 0;
 let pausePrevState = STATE.GAMEPLAY;
 
@@ -114,6 +123,36 @@ let mathResultTimer = 0;
 let mathAttempts = 0;
 let mathInputBuffer = [];
 let mathPrevState = STATE.GAMEPLAY;
+
+// Admin code buffer
+let adminCodeBuffer = '';
+
+// Teacher config & difficulty
+let mathYear = 7;              // 1-7 (which math tiers are active)
+let gameDifficulty = 'normal'; // 'easy'|'normal'|'hard'|'hell'
+let teacherPin = '';           // 4-digit string
+const DIFFICULTY_SCALE = {
+  easy:   { dmg: 0.6, hp: 1.0 },
+  normal: { dmg: 1.0, hp: 1.0 },
+  hard:   { dmg: 1.5, hp: 1.3 },
+  hell:   { dmg: 2.0, hp: 1.8 },
+};
+let activeSlot = -1;           // current save slot (-1 = none)
+// Teacher config UI state
+let teacherConfigMenu = 0;     // 0=year, 1=difficulty, 2=pin, 3=confirm
+let teacherPinBuffer = '';
+let teacherConfigMode = 'new'; // 'new' or 'edit'
+// Save menu UI state
+let saveMenuMode = 'save';     // 'save' or 'load'
+let saveMenuSlot = 0;
+let saveMenuState = 'browse';  // 'browse','naming','confirm_delete','confirm_load'
+let saveMenuNameBuffer = '';
+// PIN check in pause menu
+let teacherPinCheckMode = false;
+let teacherPinCheckBuffer = '';
+// Input buffers for teacher config and save menu
+let teacherInputBuffer = [];
+let saveInputBuffer = [];
 
 // Objective arrow system
 let showObjectiveArrow = true;
@@ -461,8 +500,9 @@ maps.tutorial = (function(){
   m.set(7,11,26); // west alcove torch
   // Side alcove east
   m.room(22,9,27,16,2,3); m.fill(23,10,26,15,2);
-  m.corridor(21,12,22,12,2);
+  m.corridor(16,12,22,12,2);
   m.set(22,11,26); // east alcove torch
+  m.set(26,15,24); // secret stone in east alcove corner
   // Exit at bottom
   m.set(15,20,11);
   return {
@@ -929,6 +969,8 @@ const player = {
   dodgeDx: 0, dodgeDy: 0,
   // Tutorial
   tutorialStep: 0, tutorialDone: false,
+  secretFound: false,
+  deaths: 0,
 };
 
 function getPlayerDamage() {
@@ -970,8 +1012,9 @@ const AREA_SCALE = { tutorial:1, ashWastes:1, boneCaverns:1.3, cursedGrounds:1.6
 function spawnEnemy(type, x, y) {
   const def = ENEMY_TYPES[type];
   const scale = AREA_SCALE[player.currentMap] || 1;
-  const hp = Math.floor(def.hp * scale);
-  const dmg = Math.floor(def.dmg * scale);
+  const diffScale = DIFFICULTY_SCALE[gameDifficulty] || DIFFICULTY_SCALE.normal;
+  const hp = Math.floor(def.hp * scale * diffScale.hp);
+  const dmg = Math.floor(def.dmg * scale * diffScale.dmg);
   const xp = Math.floor(def.xp * scale);
   enemies.push({
     type, x, y, hp, maxHp: hp, dmg, speed: def.speed * (1 + (scale-1)*0.15),
@@ -995,8 +1038,11 @@ function spawnBoss(mapName) {
       }
     }
   }
+  const bDiffScale = DIFFICULTY_SCALE[gameDifficulty] || DIFFICULTY_SCALE.normal;
+  const bossHp = Math.floor(bd.hp * bDiffScale.hp);
+  const bossDmg = Math.floor(bd.dmg * bDiffScale.dmg);
   bosses.push({
-    name: bd.name, x: cx, y: cy, hp: bd.hp, maxHp: bd.hp, dmg: bd.dmg,
+    name: bd.name, x: cx, y: cy, hp: bossHp, maxHp: bossHp, dmg: bossDmg,
     speed: bd.speed, color: bd.color, size: bd.size, matterIndex: bd.matterIndex,
     isFinal: bd.isFinal||false, mapName, sprite: bd.sprite||'skeleton',
     vx:0, vy:0, state:'idle', stateTimer:2, attackTimer:0,
@@ -1238,6 +1284,7 @@ function updatePlayer(dt) {
       if (Math.hypot(b.x-player.x, b.y-player.y) < 1.5) {
         player.hp = player.maxHp; player.stamina = player.maxStamina;
         player.lastBonfire = { map:player.currentMap, x:b.x, y:b.y };
+        if (activeSlot >= 0) saveGame(activeSlot);
         gameState = STATE.BONFIRE; bonfireMenu = 0;
         return;
       }
@@ -1390,7 +1437,7 @@ function updatePlayer(dt) {
         player.matterPieces[item.matterIndex] = true;
         player.matterCount++;
         // Inicia cutscene da materia neutra
-        matterCutsceneTimer = 5.0;
+        matterCutsceneTimer = 8.0;
         matterCutsceneIndex = item.matterIndex;
         gameState = STATE.MATTER_CUTSCENE;
       }
@@ -1421,6 +1468,29 @@ function updatePlayer(dt) {
         pathHintTimer = 2.0;
       }
       break;
+    }
+  }
+
+  // Easter egg: secret stone in tutorial east alcove
+  if (player.currentMap === 'tutorial' && !player.secretFound) {
+    if (Math.hypot(player.x - 26, player.y - 15) < 1.5 && keys['q']) {
+      keys['q'] = false;
+      player.secretFound = true;
+      player.stats.vitality = 99;
+      player.stats.strength = 99;
+      player.stats.dexterity = 99;
+      player.stats.resistance = 99;
+      player.level = 99;
+      player.maxHp = 30 + 99 * 10;
+      player.hp = player.maxHp;
+      player.maxStamina = 30 + 99 * 5;
+      player.stamina = player.maxStamina;
+      player.ashes += 1000000;
+      player.weaponLevel = 10;
+      addFloatText(player.x, player.y, 'MAX POWER!', '#ffdd00');
+      addShake(8, 0.3);
+      for(let i=0;i<12;i++) addParticle(player.x*TILE+8, player.y*TILE+8, '#ffdd00', 0.8, (Math.random()-0.5)*5, -Math.random()*5, 1.5);
+      return;
     }
   }
 
@@ -1476,7 +1546,7 @@ function updateEnemies(dt) {
         items.push({ x:e.x+0.3, y:e.y, type:'ore', value:oreVal, name:oreName, animTimer:0 });
       }
       // Vampires have a chance to drop flask
-      if (e.type === 'vampire' && Math.random() < 0.15) {
+      if (e.type === 'vampire' && Math.random() < 0.15 && gameDifficulty !== 'hell') {
         items.push({ x:e.x-0.3, y:e.y, name:'Life Flask', type:'flask', value:20, animTimer:0 });
       }
       for(let j=0;j<10;j++) addParticle(e.x*TILE+8, e.y*TILE+8, e.color, 0.8);
@@ -1554,33 +1624,28 @@ function updateBosses(dt) {
     const b = bosses[i];
     if (b.hitTimer > 0) b.hitTimer -= dt;
 
-    // Death
+    // Death — enter cinematic BOSS_DEATH state
     if (b.hp <= 0) {
       player.killedBosses.add(b.mapName);
       const ashReward = 100 + (b.isFinal ? 500 : player.killedBosses.size * 30);
-      player.ashes += ashReward;
-      addFloatText(b.x, b.y, '+'+ashReward+' Ashes', '#ffff00');
-      addShake(12, 0.4);
-      for(let j=0;j<30;j++) addParticle(b.x*TILE+8, b.y*TILE+8, b.color, 1.5, (Math.random()-0.5)*6, (Math.random()-0.5)*6, 3);
-      // Drop matter
-      if (b.matterIndex >= 0) {
-        items.push({ x:b.x, y:b.y, type:'matter', matterIndex:b.matterIndex, name:'Neutral Matter', animTimer:0 });
-      }
-      // Boss death dialogue
-      const bossDeathLines = {
-        ashWastes: 'The Ash Guardian crumbles to dust... "The city... I was supposed to protect the city. The people... are they safe?" Its stone eyes dim. It never learned they were already gone.',
-        boneCaverns: 'Commander Aldric, the Bone Lord, falls to his knees... "Tell my daughter... Aldric kept his promise. I never abandoned my post." His bones scatter gently, as if relieved.',
-        cursedGrounds: 'Father Maren\'s twisted form convulses... "The land... I can feel it healing already. My prayers... they were answered after all." The poison drains from his eyes. He smiles.',
-        fireDepths: 'The Fire Elemental flickers and dims... "The burning... it stops? I can think again. I never wanted to hurt anyone. I just... couldn\'t stop." The flames go quiet.',
-        shadowRuins: 'Veyra, the Specter, releases the forbidden tomes... "The library is yours now. Read the God\'s apology. He... truly loved this world. As did I." She fades into the pages she protected.',
-        dragonLair: 'Cindara, the Ash Dragon, lowers her great head... "You smell like him. Like the God. I waited so long..." Her fire dies. "Tell him... I forgive him. I was never angry. Just lonely."',
+      bossDeathData = {
+        x: b.x, y: b.y, color: b.color, name: b.name,
+        mapName: b.mapName, matterIndex: b.matterIndex,
+        isFinal: b.isFinal, ashReward: ashReward,
+        bossDeathLines: {
+          ashWastes: 'The Ash Guardian crumbles to dust... "The city... I was supposed to protect the city. The people... are they safe?" Its stone eyes dim. It never learned they were already gone.',
+          boneCaverns: 'Commander Aldric, the Bone Lord, falls to his knees... "Tell my daughter... Aldric kept his promise. I never abandoned my post." His bones scatter gently, as if relieved.',
+          cursedGrounds: 'Father Maren\'s twisted form convulses... "The land... I can feel it healing already. My prayers... they were answered after all." The poison drains from his eyes. He smiles.',
+          fireDepths: 'The Fire Elemental flickers and dims... "The burning... it stops? I can think again. I never wanted to hurt anyone. I just... couldn\'t stop." The flames go quiet.',
+          shadowRuins: 'Veyra, the Specter, releases the forbidden tomes... "The library is yours now. Read the God\'s apology. He... truly loved this world. As did I." She fades into the pages she protected.',
+          dragonLair: 'Cindara, the Ash Dragon, lowers her great head... "You smell like him. Like the God. I waited so long..." Her fire dies. "Tell him... I forgive him. I was never angry. Just lonely."',
+        },
       };
-      if (bossDeathLines[b.mapName]) {
-        setTimeout(() => showDialog(bossDeathLines[b.mapName]), 500);
-      }
-      if (b.isFinal) {
-        setTimeout(() => { gameState = STATE.WIN; }, 3000);
-      }
+      bossDeathTimer = 4.0;
+      gameState = STATE.BOSS_DEATH;
+      // Initial white flash + massive shake
+      addShake(15, 0.6);
+      for(let j=0;j<40;j++) addParticle(b.x*TILE+8, b.y*TILE+8, b.color, 2.0, (Math.random()-0.5)*8, (Math.random()-0.5)*8, 3);
       bosses.splice(i, 1);
       continue;
     }
@@ -1677,7 +1742,7 @@ function updateBosses(dt) {
       showMathChallenge(() => {
         spawnBoss(_mapName);
         gameState = STATE.BOSS_INTRO;
-        stateTimer = 2;
+        stateTimer = 3;
       });
       return;
     }
@@ -1687,6 +1752,7 @@ function updateBosses(dt) {
 // ==================== PLAYER DEATH ====================
 function playerDeath() {
   player.dead = true;
+  player.deaths++;
   gameState = STATE.GAME_OVER;
   stateTimer = 3;
   for(let i=0;i<20;i++) addParticle(player.x*TILE+8, player.y*TILE+8, '#ff0000', 1.5);
@@ -1807,8 +1873,9 @@ function generateMathProblem(tier) {
 }
 
 function showMathChallenge(callback, mapOverride) {
+  if (player.secretFound) { if (callback) callback(); return; }
   const area = mapOverride || player.currentMap;
-  const tier = MATH_TIER[area] || 1;
+  const tier = Math.min(MATH_TIER[area] || 1, mathYear);
   mathProblem = generateMathProblem(tier);
   mathInput = '';
   mathCallback = callback;
@@ -1830,7 +1897,7 @@ function updateMath() {
       mathResult = null;
       mathResultTimer = 0;
       if (mathAttempts >= 3) {
-        mathProblem = generateMathProblem(MATH_TIER[player.currentMap] || 1);
+        mathProblem = generateMathProblem(Math.min(MATH_TIER[player.currentMap] || 1, mathYear));
         mathAttempts = 0;
       }
       mathInput = '';
@@ -1857,7 +1924,7 @@ function updateMath() {
           // Correct
           mathResult = 'correct';
           mathResultTimer = 0;
-          const tier = MATH_TIER[player.currentMap] || 1;
+          const tier = Math.min(MATH_TIER[player.currentMap] || 1, mathYear);
           const bonus = 5 + tier * 3;
           player.ashes += bonus;
           addFloatText(player.x, player.y, '+' + bonus + ' Ashes (Math)', '#44ddff');
@@ -1866,8 +1933,8 @@ function updateMath() {
           mathResult = 'wrong';
           mathResultTimer = 1.5;
           mathAttempts++;
-          const tier = MATH_TIER[player.currentMap] || 1;
-          const dmg = 3 + tier * 2;
+          const tier2 = Math.min(MATH_TIER[player.currentMap] || 1, mathYear);
+          const dmg = 3 + tier2 * 2;
           player.hp -= dmg;
           addFloatText(player.x, player.y, '-' + dmg + ' HP', '#ff4444');
           if (player.hp <= 0) {
@@ -2085,7 +2152,8 @@ function drawTile(tileType, x, y) {
   // Rubble
   if (tileType === 24) {
     drawTile(2, x, y);
-    ctx.fillStyle = '#5a4a40';
+    const isSecret = player.currentMap === 'tutorial' && x === 26 && y === 15 && !player.secretFound;
+    ctx.fillStyle = isSecret ? '#8b2020' : '#5a4a40';
     // Random rubble pieces based on position
     const seed = x * 7 + y * 13;
     for (let i = 0; i < 4; i++) {
@@ -2093,6 +2161,10 @@ function drawTile(tileType, x, y) {
       const ry = py + ((seed + i * 23) % 30) + 4;
       const rs = 4 + (seed + i) % 6;
       ctx.fillRect(rx, ry, rs, rs - 1);
+    }
+    if (isSecret) {
+      ctx.fillStyle = 'rgba(255,50,30,' + (0.15 + Math.sin(Date.now() / 400) * 0.1) + ')';
+      ctx.fillRect(px, py, TILE * SCALE, TILE * SCALE);
     }
     return;
   }
@@ -2117,6 +2189,37 @@ function drawTile(tileType, x, y) {
         ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
       }
     }
+    // Wall edge details for depth
+    if (tileType === 3 || tileType === 4) {
+      const s = TILE * SCALE;
+      // Top highlight (light catches top edge)
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fillRect(px, py, s, 1);
+      // Bottom shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.fillRect(px, py + s - 1, s, 1);
+      // Position-seeded crack lines
+      const seed = (x * 31 + y * 17) % 7;
+      ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+      ctx.lineWidth = 1;
+      if (seed < 3) {
+        ctx.beginPath();
+        ctx.moveTo(px + seed * 8 + 4, py + 6);
+        ctx.lineTo(px + seed * 8 + 12, py + s - 8);
+        ctx.stroke();
+      }
+      if (seed === 4 || seed === 5) {
+        ctx.beginPath();
+        ctx.moveTo(px + 6, py + seed * 5 + 2);
+        ctx.lineTo(px + s - 6, py + seed * 5 + 6);
+        ctx.stroke();
+      }
+      // Extra dark bottom for wall_top tiles
+      if (tileType === 4) {
+        ctx.fillStyle = 'rgba(0,0,0,0.15)';
+        ctx.fillRect(px, py + s - 3, s, 3);
+      }
+    }
   } else if (uv.color) {
     ctx.fillStyle = uv.color;
     ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
@@ -2128,6 +2231,18 @@ function drawTile(tileType, x, y) {
     } else if (hash === 1) {
       ctx.fillStyle = 'rgba(0,0,0,0.04)';
       ctx.fillRect(px, py, TILE*SCALE, TILE*SCALE);
+    }
+    // Wall edge details for color-based walls
+    if (tileType === 3 || tileType === 4) {
+      const s = TILE * SCALE;
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      ctx.fillRect(px, py, s, 1);
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.fillRect(px, py + s - 1, s, 1);
+      if (tileType === 4) {
+        ctx.fillStyle = 'rgba(0,0,0,0.12)';
+        ctx.fillRect(px, py + s - 3, s, 3);
+      }
     }
   }
 }
@@ -2346,15 +2461,23 @@ function drawPlayer() {
   const flipX = (player.facing === 2);
   const isWalking = (keys['w']||keys['a']||keys['s']||keys['d']||keys['arrowup']||keys['arrowdown']||keys['arrowleft']||keys['arrowright']);
   const walkBob = isWalking ? Math.sin(player.walkFrame * 2) * 1.5 * SCALE : 0;
-  // Use rows 0-3 as walk animation frames when moving, row 0 when idle
-  const animRow = isWalking ? (Math.floor(player.walkFrame) % 4) : 0;
+  const animRow = 0;
 
   if (img) {
     ctx.save();
+    // Weapon glow ring under player
+    if (player.weapon) {
+      const glowColor = player.weapon === 'sword' ? 'rgba(60,120,220,' : 'rgba(160,100,40,';
+      const pulse = 0.08 + Math.sin(Date.now() / 500) * 0.04;
+      ctx.fillStyle = glowColor + pulse + ')';
+      ctx.beginPath();
+      ctx.ellipse(px + TILE*SCALE/2, py + TILE*SCALE - SCALE, 10*SCALE, 4*SCALE, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
     // Shadow under player
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.beginPath();
-    ctx.ellipse(px + TILE*SCALE/2, py + TILE*SCALE - SCALE, 7*SCALE, 2.5*SCALE, 0, 0, Math.PI*2);
+    ctx.ellipse(px + TILE*SCALE/2, py + TILE*SCALE - SCALE, 8*SCALE, 3*SCALE, 0, 0, Math.PI*2);
     ctx.fill();
     // Character sprite: col 0, row = animRow
     if (flipX) {
@@ -2802,16 +2925,73 @@ function drawItems() {
 function drawBonfireInteract() {}
 
 // ==================== DARK ATMOSPHERE / LIGHTING ====================
+const AREA_VIGNETTE = {
+  tutorial:       {r:0,   g:0,   b:0},
+  ashWastes:      {r:40,  g:20,  b:0},
+  boneCaverns:    {r:0,   g:0,   b:30},
+  cursedGrounds:  {r:10,  g:20,  b:5},
+  fireDepths:     {r:40,  g:0,   b:0},
+  shadowRuins:    {r:20,  g:0,   b:30},
+  dragonLair:     {r:50,  g:0,   b:0},
+};
+
 function drawLighting() {
-  // Apenas uma leve vinheta nas bordas - sem escuridao no centro
   const plx = player.x*TILE*SCALE - camera.x + TILE*SCALE/2;
   const ply = player.y*TILE*SCALE - camera.y + TILE*SCALE/2;
   const r = CW * 0.8;
+  const vc = AREA_VIGNETTE[player.currentMap] || {r:0,g:0,b:0};
   const grad = ctx.createRadialGradient(plx, ply, r*0.5, plx, ply, r);
-  grad.addColorStop(0, 'rgba(0,0,0,0)');
-  grad.addColorStop(1, 'rgba(0,0,0,0.25)');
+  grad.addColorStop(0, 'rgba('+vc.r+','+vc.g+','+vc.b+',0)');
+  grad.addColorStop(0.7, 'rgba('+vc.r+','+vc.g+','+vc.b+',0.1)');
+  grad.addColorStop(1, 'rgba('+vc.r+','+vc.g+','+vc.b+',0.3)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CW, CH);
+}
+
+const AMBIENT_COLORS = {
+  tutorial:       ['rgba(180,180,180,','rgba(150,150,160,'],
+  ashWastes:      ['rgba(160,140,120,','rgba(130,120,100,'],
+  boneCaverns:    ['rgba(220,220,230,','rgba(200,200,210,'],
+  cursedGrounds:  ['rgba(80,180,60,',  'rgba(60,150,80,'],
+  fireDepths:     ['rgba(255,160,40,', 'rgba(255,120,20,'],
+  shadowRuins:    ['rgba(160,80,200,', 'rgba(130,60,180,'],
+  dragonLair:     ['rgba(255,80,30,',  'rgba(255,50,10,'],
+};
+const AMBIENT_COUNT = 15;
+let ambientParticles = null;
+
+function initAmbientParticles() {
+  ambientParticles = [];
+  for (let i = 0; i < AMBIENT_COUNT; i++) {
+    ambientParticles.push({
+      x: Math.random() * CW, y: Math.random() * CH,
+      phase: Math.random() * Math.PI * 2,
+      speed: 0.3 + Math.random() * 0.4,
+      size: 1 + Math.random() * 2,
+      alpha: 0.2 + Math.random() * 0.3,
+    });
+  }
+}
+
+function drawAmbientParticles() {
+  if (!ambientParticles) initAmbientParticles();
+  const cols = AMBIENT_COLORS[player.currentMap] || AMBIENT_COLORS.tutorial;
+  const t = Date.now() / 1000;
+  for (let i = 0; i < AMBIENT_COUNT; i++) {
+    const p = ambientParticles[i];
+    p.x += Math.sin(t * p.speed + p.phase) * 0.3;
+    p.y -= p.speed * 0.5;
+    // Wrap around screen
+    if (p.y < -5) { p.y = CH + 5; p.x = Math.random() * CW; }
+    if (p.x < -5) p.x = CW + 5;
+    if (p.x > CW + 5) p.x = -5;
+    const flicker = 0.7 + Math.sin(t * 2 + p.phase) * 0.3;
+    const a = p.alpha * flicker;
+    ctx.fillStyle = cols[i % cols.length] + a.toFixed(2) + ')';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 // ==================== HUD ====================
@@ -2909,7 +3089,11 @@ function drawHUD() {
     ctx.restore();
   }
 
-  // Controls hint
+  // Deaths counter & controls hint
+  if (player.deaths > 0) {
+    ctx.fillStyle = '#774444'; ctx.font = '10px monospace';
+    ctx.fillText('\u2620 ' + player.deaths, 190, 115);
+  }
   ctx.fillStyle = '#443a33'; ctx.font = '9px monospace';
   ctx.fillText('SHIFT dodge | F interact | Q flask | TAB arrow', 12, 128);
 
@@ -3091,7 +3275,16 @@ function drawTitle() {
   if (blink) {
     ctx.fillStyle = '#aa8866';
     ctx.font = 'bold 16px monospace';
-    ctx.fillText('[ PRESS ENTER ]', CW / 2, CH / 2 + 50);
+    ctx.fillText('[ PRESS ENTER - New Game ]', CW / 2, CH / 2 + 50);
+  }
+
+  // Load game hint
+  const saves = getSaveSlots();
+  const hasSaves = saves.some(s => s !== null);
+  if (hasSaves) {
+    ctx.fillStyle = '#665544';
+    ctx.font = '13px monospace';
+    ctx.fillText('[ L ] Load Game', CW / 2, CH / 2 + 80);
   }
 
   // Controls at bottom
@@ -3106,7 +3299,18 @@ function drawTitle() {
   ctx.font = '9px monospace';
   ctx.fillText('v1.0', CW - 30, CH - 8);
 
-  if (keys['enter']) { gameState = STATE.INTRO; introStep = 0; stateTimer = 0; keys['enter'] = false; }
+  if (keys['enter']) {
+    keys['enter'] = false;
+    gameState = STATE.INTRO; introStep = 0; stateTimer = 0;
+  }
+  if (keys['l'] && hasSaves) {
+    keys['l'] = false;
+    saveMenuMode = 'load';
+    saveMenuSlot = 0;
+    saveMenuState = 'browse';
+    saveInputBuffer = [];
+    gameState = STATE.SAVE_MENU;
+  }
 }
 
 function drawIntro() {
@@ -3790,7 +3994,7 @@ function drawPause() {
   ctx.fillRect(0, 0, CW, CH);
 
   // Panel
-  const pw = 320, ph = 300;
+  const pw = 320, ph = 340;
   const px = CW / 2 - pw / 2, py = CW > 0 ? CH / 2 - ph / 2 - 20 : 100;
 
   // Panel bg
@@ -3808,9 +4012,10 @@ function drawPause() {
   ctx.fillStyle = '#4a3a20'; ctx.fillRect(CW / 2 - 60, py + 48, 120, 1);
 
   // Menu options
-  const options = ['Continue', 'Controls', 'Back to Title'];
-  const optDescs = ['Return to game', 'View key bindings', 'Exit to title screen'];
-  for (let i = 0; i < options.length; i++) {
+  const options = ['Continue', 'Save Game', 'Controls', 'Back to Title'];
+  const optDescs = ['Return to game', 'Save your progress', 'View key bindings', 'Exit to title screen'];
+  const optCount = options.length;
+  for (let i = 0; i < optCount; i++) {
     const oy = py + 80 + i * 55;
     const sel = i === pauseMenu;
     if (sel) {
@@ -3827,8 +4032,8 @@ function drawPause() {
     ctx.fillText(optDescs[i], CW / 2, oy + 28);
   }
 
-  // Controls panel (shows when option 1 selected)
-  if (pauseMenu === 1) {
+  // Controls panel (shows when Controls selected)
+  if (pauseMenu === 2) {
     const cy = py + ph + 10;
     ctx.fillStyle = 'rgba(15,12,8,0.95)';
     ctx.fillRect(px, cy, pw, 190);
@@ -3857,10 +4062,10 @@ function drawPause() {
   ctx.fillText('UP/DOWN Select  |  ENTER Confirm  |  ESC Close', CW / 2, py + ph - 15);
 
   // Input
-  if (keys['arrowup']) { keys['arrowup'] = false; pauseMenu = (pauseMenu - 1 + 3) % 3; }
-  if (keys['arrowdown']) { keys['arrowdown'] = false; pauseMenu = (pauseMenu + 1) % 3; }
-  if (keys['w']) { keys['w'] = false; pauseMenu = (pauseMenu - 1 + 3) % 3; }
-  if (keys['s']) { keys['s'] = false; pauseMenu = (pauseMenu + 1) % 3; }
+  if (keys['arrowup']) { keys['arrowup'] = false; pauseMenu = (pauseMenu - 1 + optCount) % optCount; }
+  if (keys['arrowdown']) { keys['arrowdown'] = false; pauseMenu = (pauseMenu + 1) % optCount; }
+  if (keys['w']) { keys['w'] = false; pauseMenu = (pauseMenu - 1 + optCount) % optCount; }
+  if (keys['s']) { keys['s'] = false; pauseMenu = (pauseMenu + 1) % optCount; }
   if (keys['escape']) {
     keys['escape'] = false;
     gameState = pausePrevState;
@@ -3869,35 +4074,619 @@ function drawPause() {
     keys['enter'] = false; mouse.clicked = false;
     if (pauseMenu === 0) {
       gameState = pausePrevState;
-    } else if (pauseMenu === 2) {
+    } else if (pauseMenu === 1) {
+      saveMenuMode = 'save';
+      saveMenuSlot = 0;
+      saveMenuState = 'browse';
+      saveInputBuffer = [];
+      gameState = STATE.SAVE_MENU;
+    } else if (pauseMenu === 3) {
       gameState = STATE.TITLE;
     }
-    // pauseMenu === 1 (Controls) just stays on pause showing controls
+    // pauseMenu === 2 (Controls) just stays on pause showing controls
+  }
+}
+
+// ==================== ADMIN CODE ====================
+function activateAdmin() {
+  player.stats.vitality = 99;
+  player.stats.strength = 99;
+  player.stats.dexterity = 99;
+  player.stats.resistance = 99;
+  player.level = 99;
+  player.maxHp = 30 + 99 * 10;
+  player.hp = player.maxHp;
+  player.maxStamina = 30 + 99 * 5;
+  player.stamina = player.maxStamina;
+  player.ashes = 9999999;
+  player.weaponLevel = 10;
+  player.hasPickaxe = true;
+  player.secretFound = true;
+  player.matterPieces = [true,true,true,true,true,true,true,true,true];
+  player.matterCount = 9;
+  gameState = STATE.INTRO; introStep = 0; stateTimer = 0;
+}
+
+// ==================== TEACHER CONFIG & SAVE SYSTEM ====================
+function saveTeacherSettings() {
+  try {
+    localStorage.setItem('topdouw_teacher', JSON.stringify({ mathYear, gameDifficulty, teacherPin }));
+  } catch(e) {}
+}
+function loadTeacherSettings() {
+  try {
+    const d = JSON.parse(localStorage.getItem('topdouw_teacher'));
+    if (d) {
+      mathYear = d.mathYear || 7;
+      gameDifficulty = d.gameDifficulty || 'normal';
+      teacherPin = d.teacherPin || '';
+    }
+  } catch(e) {}
+}
+
+function getSaveSlots() {
+  try {
+    const d = JSON.parse(localStorage.getItem('topdouw_saves'));
+    if (Array.isArray(d) && d.length === 10) return d;
+  } catch(e) {}
+  return [null,null,null,null,null,null,null,null,null,null];
+}
+
+function saveGame(slotIndex, name) {
+  const slots = getSaveSlots();
+  const areaNames = { tutorial:'Tutorial', ashWastes:'Ash Wastes', boneCaverns:'Bone Caverns', cursedGrounds:'Cursed Grounds', fireDepths:'Fire Depths', shadowRuins:'Shadow Ruins', dragonLair:'Dragon Lair' };
+  slots[slotIndex] = {
+    name: name || (slots[slotIndex] && slots[slotIndex].name) || 'Save ' + (slotIndex + 1),
+    timestamp: Date.now(),
+    areaName: areaNames[player.currentMap] || player.currentMap,
+    level: player.level,
+    player: {
+      x: player.x, y: player.y, hp: player.hp, maxHp: player.maxHp,
+      stamina: player.stamina, maxStamina: player.maxStamina,
+      ashes: player.ashes, level: player.level,
+      stats: { ...player.stats },
+      weapon: player.weapon, hasPickaxe: player.hasPickaxe,
+      inventory: [...player.inventory],
+      matterPieces: [...player.matterPieces], matterCount: player.matterCount,
+      weaponLevel: player.weaponLevel,
+      currentMap: player.currentMap,
+      lastBonfire: { ...player.lastBonfire },
+      killedBosses: [...player.killedBosses],
+      openedChests: [...player.openedChests],
+      tutorialStep: player.tutorialStep, tutorialDone: player.tutorialDone,
+      secretFound: player.secretFound,
+      deaths: player.deaths,
+    },
+    visitedMaps: [...visitedMaps],
+    gameDifficulty, mathYear, teacherPin,
+  };
+  try { localStorage.setItem('topdouw_saves', JSON.stringify(slots)); } catch(e) {}
+}
+
+function loadGame(slotIndex) {
+  const slots = getSaveSlots();
+  const s = slots[slotIndex];
+  if (!s) return false;
+  const p = s.player;
+  player.x = p.x; player.y = p.y;
+  player.hp = p.hp; player.maxHp = p.maxHp;
+  player.stamina = p.stamina; player.maxStamina = p.maxStamina;
+  player.ashes = p.ashes; player.level = p.level;
+  player.stats = { ...p.stats };
+  player.weapon = p.weapon; player.hasPickaxe = p.hasPickaxe;
+  player.inventory = [...(p.inventory || [])];
+  player.matterPieces = [...(p.matterPieces || [false,false,false,false,false,false,false,false,false])];
+  player.matterCount = p.matterCount || 0;
+  player.weaponLevel = p.weaponLevel || 0;
+  player.currentMap = p.currentMap;
+  player.lastBonfire = { ...(p.lastBonfire || { map:'tutorial', x:15, y:17 }) };
+  player.killedBosses = new Set(p.killedBosses || []);
+  player.openedChests = new Set(p.openedChests || []);
+  player.tutorialStep = p.tutorialStep || 0;
+  player.tutorialDone = p.tutorialDone || false;
+  player.secretFound = p.secretFound || false;
+  player.deaths = p.deaths || 0;
+  player.dead = false;
+  player.attacking = false; player.attackTimer = 0; player.attackCooldown = 0;
+  player.mining = false; player.mineTimer = 0;
+  player.invincible = 0;
+  player.dodging = false; player.dodgeTimer = 0; player.dodgeCooldown = 0;
+  player.exitCooldown = 0.5;
+  visitedMaps.clear();
+  for (const m of (s.visitedMaps || [])) visitedMaps.add(m);
+  gameDifficulty = s.gameDifficulty || 'normal';
+  mathYear = s.mathYear || 7;
+  teacherPin = s.teacherPin || '';
+  activeSlot = slotIndex;
+  loadMap(player.currentMap, player.x, player.y);
+  gameState = player.tutorialDone ? STATE.GAMEPLAY : STATE.TUTORIAL;
+  return true;
+}
+
+function drawTeacherConfig() {
+  ctx.fillStyle = '#0a0808'; ctx.fillRect(0, 0, CW, CH);
+
+  // Embers
+  for (let i = 0; i < 30; i++) {
+    const seed = i * 137.5;
+    const px = (seed * 7.3 + Date.now() / (30 + i % 10)) % CW;
+    const py = CH - ((Date.now() / (20 + i % 15) + seed * 3) % (CH + 40));
+    const sz = 1 + (i % 3);
+    const alpha = (py / CH) * 0.1;
+    ctx.fillStyle = `rgba(255,80,20,${Math.max(0, alpha)})`;
+    ctx.fillRect(px, py, sz, sz);
+  }
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#dda855'; ctx.font = 'bold 24px monospace';
+  ctx.fillText('TEACHER CONFIGURATION', CW / 2, 50);
+  ctx.fillStyle = '#887766'; ctx.font = '12px monospace';
+  ctx.fillText('Give to your teacher to choose', CW / 2, 72);
+  ctx.fillStyle = '#4a3a20'; ctx.fillRect(CW / 2 - 150, 80, 300, 1);
+
+  const rows = ['Math Year', 'Difficulty', 'PIN Code', 'Confirm'];
+  const diffNames = ['easy', 'normal', 'hard', 'hell'];
+  const diffLabels = ['Easy', 'Normal', 'Hard', 'Hell'];
+  const diffDescs = ['0.6x damage, relaxed', '1x damage, standard', '1.5x dmg, 1.3x HP', '2x dmg, 1.8x HP, no flask drops'];
+
+  for (let i = 0; i < rows.length; i++) {
+    const ry = 120 + i * 80;
+    const sel = i === teacherConfigMenu;
+
+    if (sel) {
+      ctx.fillStyle = 'rgba(200,170,80,0.08)';
+      ctx.fillRect(CW / 2 - 250, ry - 10, 500, 65);
+      ctx.strokeStyle = '#aa8844'; ctx.lineWidth = 1;
+      ctx.strokeRect(CW / 2 - 250, ry - 10, 500, 65);
+    }
+
+    ctx.fillStyle = sel ? '#ffddaa' : '#887766';
+    ctx.font = sel ? 'bold 16px monospace' : '14px monospace';
+    ctx.fillText(rows[i], CW / 2, ry + 10);
+
+    if (i === 0) {
+      // Math Year
+      ctx.fillStyle = sel ? '#ffffff' : '#aaaaaa'; ctx.font = 'bold 20px monospace';
+      ctx.fillText((sel ? '< ' : '') + 'Year ' + mathYear + (sel ? ' >' : ''), CW / 2, ry + 38);
+      ctx.fillStyle = '#998877'; ctx.font = '11px monospace';
+      const tierDesc = mathYear <= 7 ? MATH_TIER_NAMES[mathYear] || '' : '';
+      ctx.fillText('Covers: ' + tierDesc, CW / 2, ry + 53);
+    } else if (i === 1) {
+      // Difficulty
+      const di = diffNames.indexOf(gameDifficulty);
+      ctx.fillStyle = sel ? '#ffffff' : '#aaaaaa'; ctx.font = 'bold 20px monospace';
+      ctx.fillText((sel ? '< ' : '') + diffLabels[di] + (sel ? ' >' : ''), CW / 2, ry + 38);
+      ctx.fillStyle = '#998877'; ctx.font = '11px monospace';
+      ctx.fillText(diffDescs[di], CW / 2, ry + 53);
+    } else if (i === 2) {
+      // PIN
+      ctx.fillStyle = sel ? '#ffffff' : '#aaaaaa'; ctx.font = 'bold 20px monospace';
+      const pinDisplay = teacherPinBuffer.length > 0 ? teacherPinBuffer.replace(/./g, '*') : '----';
+      ctx.fillText('[ ' + pinDisplay.padEnd(4, '-').split('').join(' ') + ' ]', CW / 2, ry + 38);
+      ctx.fillStyle = '#998877'; ctx.font = '11px monospace';
+      ctx.fillText(sel ? 'Type 4 digits (Backspace to clear)' : '4-digit lock (optional)', CW / 2, ry + 53);
+    } else if (i === 3) {
+      // Confirm
+      ctx.fillStyle = sel ? '#44dd66' : '#556655'; ctx.font = 'bold 18px monospace';
+      ctx.fillText('[ ENTER to Confirm ]', CW / 2, ry + 38);
+    }
+  }
+
+  // Bottom hint
+  ctx.fillStyle = '#665544'; ctx.font = '11px monospace';
+  ctx.fillText('W/S or UP/DOWN Select  |  A/D or LEFT/RIGHT Adjust  |  ENTER Confirm  |  ESC Cancel', CW / 2, CH - 20);
+
+  // Process input
+  for (const key of teacherInputBuffer) {
+    if (key === 'Escape') {
+      if (teacherConfigMode === 'edit') {
+        gameState = STATE.PAUSE;
+      } else {
+        gameState = STATE.TITLE;
+      }
+      keys['escape'] = false;
+    } else if (key === 'ArrowUp' || key === 'w') {
+      teacherConfigMenu = Math.max(0, teacherConfigMenu - 1);
+    } else if (key === 'ArrowDown' || key === 's') {
+      teacherConfigMenu = Math.min(3, teacherConfigMenu + 1);
+    } else if (key === 'ArrowLeft' || key === 'a') {
+      if (teacherConfigMenu === 0) mathYear = Math.max(1, mathYear - 1);
+      else if (teacherConfigMenu === 1) {
+        const di = diffNames.indexOf(gameDifficulty);
+        gameDifficulty = diffNames[Math.max(0, di - 1)];
+      }
+    } else if (key === 'ArrowRight' || key === 'd') {
+      if (teacherConfigMenu === 0) mathYear = Math.min(7, mathYear + 1);
+      else if (teacherConfigMenu === 1) {
+        const di = diffNames.indexOf(gameDifficulty);
+        gameDifficulty = diffNames[Math.min(3, di + 1)];
+      }
+    } else if (key === 'Enter') {
+      // Confirm from any row
+      teacherPin = teacherPinBuffer;
+      saveTeacherSettings();
+      if (teacherConfigMode === 'edit') {
+        gameState = STATE.PAUSE;
+      } else {
+        gameState = STATE.INTRO; introStep = 0; stateTimer = 0;
+      }
+    } else if (teacherConfigMenu === 2) {
+      // PIN input (only when on PIN row)
+      if (key === 'Backspace') {
+        teacherPinBuffer = teacherPinBuffer.slice(0, -1);
+      } else if (key >= '0' && key <= '9' && teacherPinBuffer.length < 4) {
+        teacherPinBuffer += key;
+      }
+    }
+  }
+  teacherInputBuffer = [];
+}
+
+function drawSaveMenu() {
+  ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(0, 0, CW, CH);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#dda855'; ctx.font = 'bold 22px monospace';
+  ctx.fillText(saveMenuMode === 'save' ? 'SAVE GAME' : 'LOAD GAME', CW / 2, 40);
+  ctx.fillStyle = '#4a3a20'; ctx.fillRect(CW / 2 - 100, 48, 200, 1);
+
+  const slots = getSaveSlots();
+  const slotH = 48, startY = 65, panelW = 500;
+  const panelX = CW / 2 - panelW / 2;
+
+  for (let i = 0; i < 10; i++) {
+    const sy = startY + i * (slotH + 4);
+    const sel = i === saveMenuSlot;
+    const s = slots[i];
+
+    ctx.fillStyle = sel ? 'rgba(200,170,80,0.12)' : 'rgba(20,15,10,0.6)';
+    ctx.fillRect(panelX, sy, panelW, slotH);
+    if (sel) {
+      ctx.strokeStyle = '#aa8844'; ctx.lineWidth = 1;
+      ctx.strokeRect(panelX, sy, panelW, slotH);
+    }
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = sel ? '#ffddaa' : '#887766'; ctx.font = 'bold 13px monospace';
+    ctx.fillText('Slot ' + (i + 1), panelX + 10, sy + 20);
+
+    if (s) {
+      ctx.fillStyle = sel ? '#ffffff' : '#bbbbbb'; ctx.font = '13px monospace';
+      ctx.fillText(s.name, panelX + 80, sy + 20);
+      ctx.fillStyle = sel ? '#aaaaaa' : '#777777'; ctx.font = '11px monospace';
+      ctx.fillText('Lv.' + (s.level || 1) + '  ' + (s.areaName || '?'), panelX + 80, sy + 38);
+      ctx.textAlign = 'right';
+      const d = new Date(s.timestamp);
+      const ts = d.getDate() + '/' + (d.getMonth()+1) + ' ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
+      ctx.fillStyle = sel ? '#998877' : '#665544'; ctx.font = '10px monospace';
+      ctx.fillText(ts, panelX + panelW - 10, sy + 20);
+    } else {
+      ctx.fillStyle = sel ? '#888888' : '#555555'; ctx.font = '12px monospace';
+      ctx.fillText('--- Empty ---', panelX + 80, sy + 28);
+    }
+    ctx.textAlign = 'center';
+  }
+
+  // Naming overlay
+  if (saveMenuState === 'naming') {
+    ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, CW, CH);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#dda855'; ctx.font = 'bold 18px monospace';
+    ctx.fillText('Enter Save Name', CW / 2, CH / 2 - 40);
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 20px monospace';
+    const cursor = Math.sin(Date.now() / 300) > 0 ? '_' : '';
+    ctx.fillText(saveMenuNameBuffer + cursor, CW / 2, CH / 2 + 10);
+    ctx.fillStyle = '#665544'; ctx.font = '12px monospace';
+    ctx.fillText('ENTER to confirm  |  ESC to cancel', CW / 2, CH / 2 + 50);
+  }
+
+  // Confirm load overlay
+  if (saveMenuState === 'confirm_load') {
+    ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, CW, CH);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#dda855'; ctx.font = 'bold 18px monospace';
+    ctx.fillText('Load this save?', CW / 2, CH / 2 - 20);
+    ctx.fillStyle = '#887766'; ctx.font = '13px monospace';
+    const sl = slots[saveMenuSlot];
+    ctx.fillText((sl ? sl.name : '') + ' - Lv.' + (sl ? sl.level : '?'), CW / 2, CH / 2 + 10);
+    ctx.fillStyle = '#665544'; ctx.font = '12px monospace';
+    ctx.fillText('ENTER to load  |  ESC to cancel', CW / 2, CH / 2 + 40);
+  }
+
+  // Confirm delete overlay
+  if (saveMenuState === 'confirm_delete') {
+    ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, CW, CH);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#dd4444'; ctx.font = 'bold 18px monospace';
+    ctx.fillText('Delete this save?', CW / 2, CH / 2 - 20);
+    ctx.fillStyle = '#887766'; ctx.font = '13px monospace';
+    const sd = slots[saveMenuSlot];
+    ctx.fillText((sd ? sd.name : '') + ' - Lv.' + (sd ? sd.level : '?'), CW / 2, CH / 2 + 10);
+    ctx.fillStyle = '#665544'; ctx.font = '12px monospace';
+    ctx.fillText('ENTER to delete  |  ESC to cancel', CW / 2, CH / 2 + 40);
+  }
+
+  // Bottom hint
+  if (saveMenuState === 'browse') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#665544'; ctx.font = '11px monospace';
+    const hint = saveMenuMode === 'save'
+      ? 'UP/DOWN Select  |  ENTER Save  |  D Delete  |  ESC Back'
+      : 'UP/DOWN Select  |  ENTER Load  |  D Delete  |  ESC Back';
+    ctx.fillText(hint, CW / 2, CH - 12);
+  }
+
+  // Process input
+  for (const key of saveInputBuffer) {
+    if (saveMenuState === 'naming') {
+      if (key === 'Escape') {
+        saveMenuState = 'browse';
+      } else if (key === 'Enter') {
+        if (saveMenuNameBuffer.length === 0) saveMenuNameBuffer = 'Save ' + (saveMenuSlot + 1);
+        saveGame(saveMenuSlot, saveMenuNameBuffer);
+        activeSlot = saveMenuSlot;
+        saveMenuState = 'browse';
+        saveMenuNameBuffer = '';
+      } else if (key === 'Backspace') {
+        saveMenuNameBuffer = saveMenuNameBuffer.slice(0, -1);
+      } else if (key.length === 1 && saveMenuNameBuffer.length < 16) {
+        saveMenuNameBuffer += key;
+      }
+      continue;
+    }
+
+    if (saveMenuState === 'confirm_load') {
+      if (key === 'Escape') { saveMenuState = 'browse'; }
+      else if (key === 'Enter') { loadGame(saveMenuSlot); }
+      continue;
+    }
+
+    if (saveMenuState === 'confirm_delete') {
+      if (key === 'Escape') { saveMenuState = 'browse'; }
+      else if (key === 'Enter') {
+        const sl2 = getSaveSlots();
+        sl2[saveMenuSlot] = null;
+        try { localStorage.setItem('topdouw_saves', JSON.stringify(sl2)); } catch(e) {}
+        saveMenuState = 'browse';
+      }
+      continue;
+    }
+
+    // Browse state
+    if (key === 'Escape') {
+      keys['escape'] = false;
+      if (saveMenuMode === 'load') { gameState = STATE.TITLE; }
+      else { gameState = STATE.PAUSE; }
+    } else if (key === 'ArrowUp') {
+      saveMenuSlot = (saveMenuSlot - 1 + 10) % 10;
+    } else if (key === 'ArrowDown') {
+      saveMenuSlot = (saveMenuSlot + 1) % 10;
+    } else if (key === 'Enter') {
+      if (saveMenuMode === 'save') {
+        saveMenuNameBuffer = slots[saveMenuSlot] ? slots[saveMenuSlot].name : '';
+        saveMenuState = 'naming';
+      } else {
+        if (slots[saveMenuSlot]) { saveMenuState = 'confirm_load'; }
+      }
+    } else if ((key === 'd' || key === 'D') && slots[saveMenuSlot]) {
+      saveMenuState = 'confirm_delete';
+    }
+  }
+  saveInputBuffer = [];
+}
+
+// ==================== BOSS DEATH CINEMATIC ====================
+function drawBossDeath() {
+  bossDeathTimer -= dt;
+  const t = 4.0 - bossDeathTimer; // elapsed (0 to 4)
+  if (!bossDeathData) { gameState = STATE.GAMEPLAY; return; }
+  const bd = bossDeathData;
+  const bossScreenX = bd.x * TILE * SCALE - camera.x;
+  const bossScreenY = bd.y * TILE * SCALE - camera.y;
+
+  // ===== Phase 1 (0-1s): Boss flashes white, screen desaturates, big shake =====
+  if (t < 1.0) {
+    const p1 = t / 1.0;
+    // White flash (bright at start, fading)
+    if (t < 0.15) {
+      ctx.fillStyle = `rgba(255,255,255,${0.7 * (1 - t / 0.15)})`;
+      ctx.fillRect(0, 0, CW, CH);
+    }
+    // Desaturation overlay
+    ctx.fillStyle = `rgba(10,5,15,${p1 * 0.4})`;
+    ctx.fillRect(0, 0, CW, CH);
+    // Boss silhouette flashing
+    const flashAlpha = 0.3 + Math.sin(t * 20) * 0.3;
+    ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
+    ctx.fillRect(bossScreenX - 16, bossScreenY - 16, 32, 32);
+    // Expanding glow at boss position
+    const glowR = 30 + p1 * 80;
+    const glow = ctx.createRadialGradient(bossScreenX, bossScreenY, 0, bossScreenX, bossScreenY, glowR);
+    glow.addColorStop(0, `rgba(255,200,100,${0.4 * p1})`);
+    glow.addColorStop(1, 'rgba(255,200,100,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(bossScreenX - glowR, bossScreenY - glowR, glowR * 2, glowR * 2);
+  }
+
+  // ===== Phase 2 (1-2.5s): Disintegration — particle waves, pillar of light =====
+  if (t >= 1.0 && t < 2.5) {
+    const p2 = (t - 1.0) / 1.5;
+    // Dark overlay
+    ctx.fillStyle = `rgba(10,5,15,${0.4 + p2 * 0.2})`;
+    ctx.fillRect(0, 0, CW, CH);
+
+    // Pillar of light at boss position
+    const pillarW = 40 + 60 * p2;
+    const pillarAlpha = 0.5 * (1 - p2 * 0.5);
+    const pillarGrad = ctx.createLinearGradient(bossScreenX, bossScreenY - 300, bossScreenX, bossScreenY + 100);
+    pillarGrad.addColorStop(0, `rgba(255,255,255,0)`);
+    pillarGrad.addColorStop(0.3, `rgba(255,220,150,${pillarAlpha})`);
+    pillarGrad.addColorStop(0.7, `rgba(255,180,100,${pillarAlpha * 0.8})`);
+    pillarGrad.addColorStop(1, 'rgba(255,150,50,0)');
+    ctx.fillStyle = pillarGrad;
+    ctx.fillRect(bossScreenX - pillarW / 2, bossScreenY - 300, pillarW, 400);
+
+    // Expanding light ring
+    const ringR = p2 * 250;
+    const ringAlpha = Math.max(0, 0.6 - p2 * 0.7);
+    ctx.strokeStyle = `rgba(255,200,100,${ringAlpha})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(bossScreenX, bossScreenY, ringR, 0, Math.PI * 2); ctx.stroke();
+
+    // Second delayed ring
+    if (p2 > 0.3) {
+      const ring2R = (p2 - 0.3) * 250;
+      const ring2Alpha = Math.max(0, 0.4 - (p2 - 0.3) * 0.6);
+      ctx.strokeStyle = `rgba(255,180,80,${ring2Alpha})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(bossScreenX, bossScreenY, ring2R, 0, Math.PI * 2); ctx.stroke();
+    }
+
+    // Particle wave bursts
+    if (Math.random() < 0.4) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 3 + Math.random() * 4;
+      addParticle(bd.x * TILE + 8, bd.y * TILE + 8, bd.color, 1.5,
+        Math.cos(angle) * speed, Math.sin(angle) * speed, 2 + Math.random() * 2);
+    }
+
+    // Boss silhouette fading
+    const silAlpha = Math.max(0, 1 - p2 * 1.5);
+    if (silAlpha > 0) {
+      ctx.fillStyle = `rgba(40,20,40,${silAlpha})`;
+      ctx.fillRect(bossScreenX - 14, bossScreenY - 14, 28, 28);
+    }
+
+    // Vignette (dark edges)
+    const vig = ctx.createRadialGradient(bossScreenX, bossScreenY, 50, bossScreenX, bossScreenY, CW * 0.6);
+    vig.addColorStop(0, 'rgba(0,0,0,0)');
+    vig.addColorStop(1, `rgba(0,0,0,${0.3 * p2})`);
+    ctx.fillStyle = vig; ctx.fillRect(0, 0, CW, CH);
+  }
+
+  // ===== Phase 3 (2.5-4s): Screen returns, ash reward text, matter glows =====
+  if (t >= 2.5) {
+    const p3 = (t - 2.5) / 1.5;
+    // Screen clearing back
+    ctx.fillStyle = `rgba(10,5,15,${0.6 * (1 - p3 * 0.8)})`;
+    ctx.fillRect(0, 0, CW, CH);
+
+    // Ash reward text slams in
+    if (p3 > 0.1) {
+      const textP = Math.min(1, (p3 - 0.1) / 0.3);
+      const slamScale = 1 + (1 - textP) * 1.2;
+      const textShake = p3 < 0.5 ? (Math.random() - 0.5) * 5 * (1 - textP) : 0;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.translate(CW / 2 + textShake, CH / 2 - 30);
+      ctx.scale(slamScale, slamScale);
+      ctx.shadowColor = '#ffaa00'; ctx.shadowBlur = 25;
+      ctx.fillStyle = '#ffd644'; ctx.font = 'bold 28px monospace';
+      ctx.fillText('+' + bd.ashReward + ' Ashes', 0, 0);
+      ctx.restore();
+    }
+
+    // Boss name fading out below
+    if (p3 > 0.3) {
+      const nameAlpha = Math.min(1, (p3 - 0.3) / 0.4) * (p3 < 0.9 ? 1 : Math.max(0, (1 - p3) / 0.1));
+      ctx.globalAlpha = nameAlpha;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#aa7755'; ctx.font = '16px monospace';
+      ctx.fillText(bd.name + ' defeated', CW / 2, CH / 2 + 10);
+      ctx.globalAlpha = 1;
+    }
+
+    // Matter item glow on ground
+    if (bd.matterIndex >= 0 && p3 > 0.4) {
+      const glowP = Math.min(1, (p3 - 0.4) / 0.3);
+      const mGlowR = 20 + 30 * glowP + Math.sin(t * 5) * 5;
+      const mGlow = ctx.createRadialGradient(bossScreenX, bossScreenY, 0, bossScreenX, bossScreenY, mGlowR);
+      mGlow.addColorStop(0, `rgba(200,220,255,${0.5 * glowP})`);
+      mGlow.addColorStop(1, 'rgba(150,180,255,0)');
+      ctx.fillStyle = mGlow;
+      ctx.fillRect(bossScreenX - mGlowR, bossScreenY - mGlowR, mGlowR * 2, mGlowR * 2);
+    }
+  }
+
+  // End of cinematic
+  if (bossDeathTimer <= 0) {
+    player.ashes += bd.ashReward;
+    addFloatText(bd.x, bd.y, '+' + bd.ashReward + ' Ashes', '#ffff00');
+    // Drop matter
+    if (bd.matterIndex >= 0) {
+      items.push({ x: bd.x, y: bd.y, type: 'matter', matterIndex: bd.matterIndex, name: 'Neutral Matter', animTimer: 0 });
+    }
+    // Boss death dialogue
+    if (bd.bossDeathLines[bd.mapName]) {
+      setTimeout(() => showDialog(bd.bossDeathLines[bd.mapName]), 500);
+    }
+    if (bd.isFinal) {
+      setTimeout(() => { gameState = STATE.WIN; }, 3000);
+    }
+    bossDeathData = null;
+    gameState = (!player.tutorialDone && player.currentMap === 'tutorial') ? STATE.TUTORIAL : STATE.GAMEPLAY;
   }
 }
 
 function drawBossIntro() {
   stateTimer -= dt;
-  const progress = Math.min(1, (2 - stateTimer) / 2);
+  const progress = Math.min(1, (3 - stateTimer) / 3);
+
+  // Screen shake at intro start
+  if (stateTimer > 2.5) addShake(5 * (1 - progress), 0.05);
 
   // Red vignette
   ctx.fillStyle = `rgba(40,0,0,${progress * 0.6})`;
   ctx.fillRect(0, 0, CW, CH);
 
+  // Heartbeat pulse effect
+  const heartbeat = Math.sin(stateTimer * 6) * 0.5 + 0.5;
+  ctx.fillStyle = `rgba(80,0,0,${heartbeat * 0.15 * progress})`;
+  ctx.fillRect(0, 0, CW, CH);
+
   // Letterbox bars sliding in
-  const barH = 60 * progress;
+  const barH = 65 * progress;
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, CW, barH);
   ctx.fillRect(0, CH - barH, CW, barH);
 
+  // Red energy lines from edges toward center
+  if (progress > 0.2) {
+    const lineP = Math.min(1, (progress - 0.2) / 0.5);
+    ctx.strokeStyle = `rgba(200,40,20,${0.3 * lineP})`;
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 8; i++) {
+      const edgeX = (i < 4) ? (i % 2 === 0 ? 0 : CW) : CW / 2;
+      const edgeY = (i >= 4) ? (i % 2 === 0 ? 0 : CH) : CH / 2;
+      const targetX = CW / 2 + (Math.random() - 0.5) * 30;
+      const targetY = CH / 2 + (Math.random() - 0.5) * 20;
+      ctx.beginPath();
+      ctx.moveTo(edgeX, edgeY);
+      // Lightning segments
+      let lx = edgeX, ly = edgeY;
+      for (let s = 1; s <= 4; s++) {
+        const f = s / 4 * lineP;
+        const nx = edgeX + (targetX - edgeX) * f + (Math.random() - 0.5) * 40;
+        const ny = edgeY + (targetY - edgeY) * f + (Math.random() - 0.5) * 30;
+        ctx.lineTo(nx, ny);
+      }
+      ctx.stroke();
+    }
+  }
+
   if (bosses.length > 0) {
     ctx.textAlign = 'center';
-    // Boss name with dramatic glow
+
+    // Boss name with slam effect — starts big, settles to normal
     ctx.save();
-    ctx.shadowColor = '#ff2200'; ctx.shadowBlur = 30 * progress;
+    const nameP = Math.min(1, progress / 0.6);
+    const slamScale = 1 + (1 - nameP) * 1.5;
+    const nameShake = nameP < 1 ? (Math.random() - 0.5) * 4 * (1 - nameP) : 0;
+    ctx.translate(CW / 2 + nameShake, CH / 2 - 10);
+    ctx.scale(slamScale, slamScale);
+    ctx.shadowColor = '#ff2200'; ctx.shadowBlur = 30 * progress + heartbeat * 10;
     ctx.fillStyle = `rgba(255,60,20,${progress})`;
-    ctx.font = 'bold 32px monospace';
-    ctx.fillText(bosses[0].name, CW / 2, CH / 2 - 10);
+    ctx.font = 'bold 34px monospace';
+    ctx.fillText(bosses[0].name, 0, 0);
     ctx.restore();
 
     // Subtitle - boss-specific dialogue
@@ -3910,18 +4699,19 @@ function drawBossIntro() {
       dragonLair: ['"You dare enter MY lair?!"', '"He left me here. Alone. For a THOUSAND years."'],
     };
     const introLines = bossIntroLines[player.currentMap] || ['Prepare for combat!'];
-    ctx.fillStyle = `rgba(170,100,60,${Math.max(0, progress - 0.3)})`;
+    const subtitleAlpha = Math.max(0, progress - 0.4);
+    ctx.fillStyle = `rgba(170,100,60,${subtitleAlpha})`;
     ctx.font = '14px monospace';
     for (let li = 0; li < introLines.length; li++) {
-      ctx.fillText(introLines[li], CW / 2, CH / 2 + 30 + li * 22);
+      ctx.fillText(introLines[li], CW / 2, CH / 2 + 35 + li * 22);
     }
 
-    // Red lines
+    // Red decorative lines
     ctx.strokeStyle = `rgba(200,50,20,${progress * 0.5})`;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(CW / 2 - 200 * progress, CH / 2 + 10);
-    ctx.lineTo(CW / 2 + 200 * progress, CH / 2 + 10);
+    ctx.moveTo(CW / 2 - 220 * progress, CH / 2 + 14);
+    ctx.lineTo(CW / 2 + 220 * progress, CH / 2 + 14);
     ctx.stroke();
   }
 
@@ -3967,137 +4757,301 @@ function drawGameOver() {
   ctx.fillStyle = '#885544'; ctx.font = '14px monospace';
   ctx.fillText('Lost ' + Math.floor(player.ashes * 0.3) + ' ashes', CW / 2, CH / 2 + 25);
 
+  ctx.fillStyle = '#665555'; ctx.font = '12px monospace';
+  ctx.fillText('Deaths: ' + player.deaths, CW / 2, CH / 2 + 48);
+
   const blink = Math.sin(Date.now() / 500) > 0;
   if (blink) {
     ctx.fillStyle = '#776655'; ctx.font = '13px monospace';
-    ctx.fillText('[ ENTER ] Respawn at bonfire', CW / 2, CH / 2 + 70);
+    ctx.fillText('[ ENTER ] Respawn at bonfire', CW / 2, CH / 2 + 80);
   }
   if (keys['enter']) { keys['enter'] = false; respawnPlayer(); }
 }
 
+// ==================== MATTER LORE QUOTES ====================
+const MATTER_LORE = {
+  0: '"The first fragment hums with forgotten prayers..."',
+  1: '"A commander\'s oath, crystallized into pure energy..."',
+  2: '"The land\'s poison, purified into divine light..."',
+  3: '"Fire tamed. The element remembers its purpose..."',
+  4: '"Ancient knowledge given form. The pages sing..."',
+  5: '"A dragon\'s loneliness, transformed into hope..."',
+  6: '"Found in the depths, where light dares not reach..."',
+  7: '"Hidden by the God himself, waiting for the worthy..."',
+  8: '"The final piece. The weapon stirs with anticipation..."',
+};
+
 // ==================== CUTSCENE: MATERIA NEUTRA ====================
 function drawMatterCutscene() {
-  matterCutsceneTimer -= 0.016;
-  const t = 5.0 - matterCutsceneTimer; // tempo decorrido (0 a 5)
+  matterCutsceneTimer -= dt;
+  const t = 8.0 - matterCutsceneTimer; // elapsed time (0 to 8)
+  const centerX = CW / 2, centerY = CH / 2;
 
-  // Fase 1 (0-1s): Tela escurece
-  // Fase 2 (1-3s): Materia brilha no centro
-  // Fase 3 (3-4.5s): Texto aparece
-  // Fase 4 (4.5-5s): Fade out
+  // ===== PHASE 1 (0-1.5s): Slow-motion freeze — desaturate, dramatic zoom, rumble =====
+  if (t < 1.5) {
+    const p1 = t / 1.5;
+    // Darken/desaturate screen
+    ctx.fillStyle = `rgba(0,0,10,${p1 * 0.85})`;
+    ctx.fillRect(0, 0, CW, CH);
+    // Deep rumble shake
+    if (t > 0.3) addShake(3 * p1, 0.05);
+    // Letterbox bars sliding in
+    const barH = 50 * p1;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CW, barH);
+    ctx.fillRect(0, CH - barH, CW, barH);
+    // Zoom vignette
+    const vig = ctx.createRadialGradient(centerX, centerY, CW * 0.15 * (1 - p1 * 0.3), centerX, centerY, CW * 0.55);
+    vig.addColorStop(0, 'rgba(0,0,20,0)');
+    vig.addColorStop(1, `rgba(0,0,20,${p1 * 0.6})`);
+    ctx.fillStyle = vig; ctx.fillRect(0, 0, CW, CH);
+  }
 
-  // Fundo preto com fade in
-  const fadeIn = Math.min(1, t / 0.8);
-  ctx.fillStyle = `rgba(0,0,0,${fadeIn})`;
-  ctx.fillRect(0, 0, CW, CH);
+  // ===== PHASE 2 (1.5-3.5s): Pillar of light erupts, matter rises =====
+  if (t >= 1.5 && t < 3.5) {
+    const p2 = (t - 1.5) / 2.0;
+    // Black background
+    ctx.fillStyle = '#000005'; ctx.fillRect(0, 0, CW, CH);
+    // Letterbox
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CW, 50); ctx.fillRect(0, CH - 50, CW, 50);
 
-  if (t > 0.5) {
-    // Materia neutra no centro - esfera brilhante
-    const centerX = CW/2;
-    const centerY = CH/2;
-    const pulse = 1 + Math.sin(t * 4) * 0.15;
-    const size = Math.min(1, (t-0.5)/1.0) * 40 * pulse;
+    // Pillar of light from below
+    const pillarW = 60 + 40 * p2;
+    const pillarH = CH * p2;
+    const pillarGrad = ctx.createLinearGradient(centerX, CH, centerX, CH - pillarH);
+    pillarGrad.addColorStop(0, `rgba(150,180,255,${0.6 * p2})`);
+    pillarGrad.addColorStop(0.5, `rgba(200,220,255,${0.3 * p2})`);
+    pillarGrad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = pillarGrad;
+    ctx.fillRect(centerX - pillarW / 2, CH - pillarH, pillarW, pillarH);
 
-    // Glow externo grande
-    ctx.save();
-    const glowR = size * 4;
-    const glow = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, glowR);
-    glow.addColorStop(0, 'rgba(200,220,255,0.4)');
-    glow.addColorStop(0.3, 'rgba(150,180,255,0.2)');
-    glow.addColorStop(1, 'rgba(100,130,255,0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(centerX-glowR, centerY-glowR, glowR*2, glowR*2);
-
-    // Raios de luz girando
-    for (let i = 0; i < 8; i++) {
-      const angle = t * 0.8 + i * Math.PI/4;
-      const len = size * 3 + Math.sin(t*3+i)*20;
-      ctx.strokeStyle = `rgba(200,220,255,${0.15 + Math.sin(t*2+i)*0.1})`;
-      ctx.lineWidth = 2;
+    // Energy tendrils reaching toward center
+    for (let i = 0; i < 12; i++) {
+      const angle = t * 0.6 + i * Math.PI / 6;
+      const len = (100 + i * 30) * p2;
+      const startX = centerX + Math.cos(angle) * len;
+      const startY = centerY + Math.sin(angle) * len * 0.7;
+      ctx.strokeStyle = `rgba(180,200,255,${0.15 + Math.sin(t * 3 + i) * 0.1})`;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(centerX, centerY);
-      ctx.lineTo(centerX + Math.cos(angle)*len, centerY + Math.sin(angle)*len);
+      ctx.moveTo(startX, startY);
+      // Lightning-like segments
+      let lx = startX, ly = startY;
+      const segs = 5;
+      for (let s = 1; s <= segs; s++) {
+        const frac = s / segs;
+        const tx = startX + (centerX - startX) * frac + (Math.random() - 0.5) * 20;
+        const ty = startY + (centerY - startY) * frac + (Math.random() - 0.5) * 20;
+        ctx.lineTo(tx, ty);
+      }
       ctx.stroke();
     }
 
-    // Particulas orbitando
-    for (let i = 0; i < 20; i++) {
-      const angle = t * 1.5 + i * Math.PI/10;
-      const dist = size * 1.5 + Math.sin(t*2+i*0.7)*15;
-      const px = centerX + Math.cos(angle)*dist;
-      const py = centerY + Math.sin(angle)*dist*0.6;
-      const psize = 2 + Math.sin(t*3+i)*1.5;
-      ctx.fillStyle = `rgba(255,255,255,${0.4+Math.sin(t*4+i)*0.3})`;
-      ctx.fillRect(px-psize/2, py-psize/2, psize, psize);
+    // Matter sphere rising from bottom
+    const sphereY = CH * 0.8 - (CH * 0.8 - centerY) * Math.min(1, p2 * 1.5);
+    const sphereSize = 20 + 20 * p2;
+    const pulse = 1 + Math.sin(t * 6) * 0.1;
+    // Outer glow
+    const glow = ctx.createRadialGradient(centerX, sphereY, 0, centerX, sphereY, sphereSize * 3 * pulse);
+    glow.addColorStop(0, 'rgba(200,220,255,0.5)');
+    glow.addColorStop(0.4, 'rgba(150,180,255,0.2)');
+    glow.addColorStop(1, 'rgba(100,130,255,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(centerX - sphereSize * 3, sphereY - sphereSize * 3, sphereSize * 6, sphereSize * 6);
+    // Sphere
+    const sGrad = ctx.createRadialGradient(centerX, sphereY, 0, centerX, sphereY, sphereSize * pulse);
+    sGrad.addColorStop(0, '#ffffff');
+    sGrad.addColorStop(0.4, '#ddeeff');
+    sGrad.addColorStop(0.8, '#8899cc');
+    sGrad.addColorStop(1, 'rgba(80,100,180,0)');
+    ctx.fillStyle = sGrad;
+    ctx.beginPath(); ctx.arc(centerX, sphereY, sphereSize * pulse, 0, Math.PI * 2); ctx.fill();
+
+    // Screen flash at end of phase 2
+    if (p2 > 0.85) {
+      const flashAlpha = (p2 - 0.85) / 0.15 * 0.8;
+      ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
+      ctx.fillRect(0, 0, CW, CH);
+      addShake(8, 0.1);
     }
-
-    // Esfera central
-    const sphereGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, size);
-    sphereGrad.addColorStop(0, '#ffffff');
-    sphereGrad.addColorStop(0.3, '#ddeeff');
-    sphereGrad.addColorStop(0.7, '#8899cc');
-    sphereGrad.addColorStop(1, 'rgba(80,100,180,0)');
-    ctx.fillStyle = sphereGrad;
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, size, 0, Math.PI*2);
-    ctx.fill();
-
-    // Brilho central
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(centerX-size*0.2, centerY-size*0.2, size*0.25, 0, Math.PI*2);
-    ctx.fill();
-    ctx.restore();
   }
 
-  // Textos
-  ctx.textAlign = 'center';
-  if (t > 1.5 && t < 4.8) {
-    const textAlpha = Math.min(1, (t-1.5)/0.5) * (t < 4.3 ? 1 : Math.max(0, (4.8-t)/0.5));
-    ctx.globalAlpha = textAlpha;
-
-    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 28px monospace';
-    ctx.fillText('NEUTRAL MATTER', CW/2, 100);
-
-    ctx.fillStyle = '#aabbdd'; ctx.font = '18px monospace';
-    ctx.fillText('Fragment '+(matterCutsceneIndex+1)+' of 9', CW/2, 140);
-
-    ctx.fillStyle = '#ffcc44'; ctx.font = 'bold 20px monospace';
-    ctx.fillText(player.matterCount + ' / 9 collected', CW/2, CH-100);
-
-    if (player.matterCount >= 9) {
-      ctx.fillStyle = '#44ff44'; ctx.font = '16px monospace';
-      ctx.fillText('All parts gathered! Find the Smith!', CW/2, CH-65);
-    } else {
-      ctx.fillStyle = '#888888'; ctx.font = '14px monospace';
-      ctx.fillText('Defeat the Bosses to find the remaining fragments.', CW/2, CH-65);
-    }
-
-    // Barra de progresso das materias
-    const barW = 300, barH = 12;
-    const barX = CW/2 - barW/2, barY = CH-45;
-    ctx.fillStyle = 'rgba(255,255,255,0.15)';
-    ctx.fillRect(barX, barY, barW, barH);
-    // Segmentos individuais
-    for (let i = 0; i < 9; i++) {
-      const segX = barX + i*(barW/9) + 1;
-      const segW = barW/9 - 2;
-      ctx.fillStyle = player.matterPieces[i] ? '#aaccff' : 'rgba(255,255,255,0.08)';
-      ctx.fillRect(segX, barY+1, segW, barH-2);
-    }
-
-    ctx.globalAlpha = 1;
-  }
-
-  // Fade out no final
-  if (t > 4.5) {
-    const fadeOut = (t - 4.5) / 0.5;
-    ctx.fillStyle = `rgba(0,0,0,${fadeOut})`;
+  // ===== PHASE 3 (3.5-6s): Absorption — shockwave, achievement banner, fragment count =====
+  if (t >= 3.5 && t < 6.0) {
+    const p3 = (t - 3.5) / 2.5;
+    // Dark background fading back
+    ctx.fillStyle = `rgba(0,0,10,${1 - p3 * 0.3})`;
     ctx.fillRect(0, 0, CW, CH);
+    // Letterbox
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CW, 50); ctx.fillRect(0, CH - 50, CW, 50);
+
+    // Shockwave rings expanding outward
+    for (let ring = 0; ring < 3; ring++) {
+      const ringDelay = ring * 0.3;
+      const ringP = Math.max(0, p3 - ringDelay);
+      if (ringP > 0) {
+        const radius = ringP * 350;
+        const alpha = Math.max(0, 0.5 - ringP * 0.6);
+        ctx.strokeStyle = `rgba(200,220,255,${alpha})`;
+        ctx.lineWidth = 3 - ring;
+        ctx.beginPath(); ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+
+    // Imploding particles toward center (early phase)
+    if (p3 < 0.5) {
+      for (let i = 0; i < 16; i++) {
+        const angle = i * Math.PI / 8 + t;
+        const dist = (1 - p3 * 2) * 200;
+        const px = centerX + Math.cos(angle) * dist;
+        const py = centerY + Math.sin(angle) * dist * 0.6;
+        ctx.fillStyle = `rgba(255,255,255,${0.5 - p3})`;
+        ctx.fillRect(px - 2, py - 2, 4, 4);
+      }
+    }
+
+    // Achievement banner: "FRAGMENT ACQUIRED"
+    if (p3 > 0.15) {
+      const textP = Math.min(1, (p3 - 0.15) / 0.3);
+      // Slam effect: starts big, settles
+      const slamScale = 1 + (1 - textP) * 0.8;
+      const textShake = p3 < 0.5 ? (Math.random() - 0.5) * 4 * (1 - textP) : 0;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.translate(centerX + textShake, 120);
+      ctx.scale(slamScale, slamScale);
+      // Golden text with glow
+      ctx.shadowColor = '#ffaa00'; ctx.shadowBlur = 20 + 10 * Math.sin(t * 4);
+      ctx.fillStyle = '#ffd644';
+      ctx.font = 'bold 36px monospace';
+      ctx.fillText('FRAGMENT ACQUIRED', 0, 0);
+      // White outline
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.lineWidth = 1;
+      ctx.strokeText('FRAGMENT ACQUIRED', 0, 0);
+      ctx.restore();
+
+      // Fragment count
+      const countAlpha = Math.min(1, (p3 - 0.3) / 0.3);
+      if (countAlpha > 0) {
+        ctx.globalAlpha = countAlpha;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#aabbdd'; ctx.font = 'bold 22px monospace';
+        ctx.fillText('Fragment ' + (matterCutsceneIndex + 1) + ' of 9', centerX, 170);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // Lore quote
+    if (p3 > 0.5) {
+      const loreAlpha = Math.min(1, (p3 - 0.5) / 0.5);
+      ctx.globalAlpha = loreAlpha;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#99aacc'; ctx.font = 'italic 15px monospace';
+      const loreText = MATTER_LORE[matterCutsceneIndex] || '"The fragment pulses with unknown energy..."';
+      ctx.fillText(loreText, centerX, centerY + 20);
+      ctx.globalAlpha = 1;
+    }
+
+    // Progress bar with dramatic fill
+    if (p3 > 0.6) {
+      const barAlpha = Math.min(1, (p3 - 0.6) / 0.3);
+      ctx.globalAlpha = barAlpha;
+      const barW = 320, barH = 14;
+      const barX = centerX - barW / 2, barY = CH - 100;
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      ctx.fillRect(barX, barY, barW, barH);
+      for (let i = 0; i < 9; i++) {
+        const segX = barX + i * (barW / 9) + 1;
+        const segW = barW / 9 - 2;
+        if (player.matterPieces[i]) {
+          // Lit segment with glow
+          ctx.fillStyle = '#aaccff';
+          ctx.fillRect(segX, barY + 1, segW, barH - 2);
+          ctx.fillStyle = 'rgba(180,210,255,0.3)';
+          ctx.fillRect(segX, barY + 1, segW, (barH - 2) / 2);
+        } else {
+          ctx.fillStyle = 'rgba(255,255,255,0.06)';
+          ctx.fillRect(segX, barY + 1, segW, barH - 2);
+        }
+      }
+      // Count text below bar
+      ctx.fillStyle = '#ffcc44'; ctx.font = 'bold 16px monospace';
+      ctx.fillText(player.matterCount + ' / 9', centerX, barY + barH + 22);
+      if (player.matterCount >= 9) {
+        ctx.fillStyle = '#44ff88'; ctx.font = '13px monospace';
+        ctx.fillText('All fragments gathered! Find the Smith!', centerX, barY + barH + 42);
+      }
+      ctx.globalAlpha = 1;
+    }
   }
 
-  // Acabou a cutscene
+  // ===== PHASE 4 (6-8s): Afterglow — golden particles rain, vignette, fade out =====
+  if (t >= 6.0) {
+    const p4 = (t - 6.0) / 2.0;
+    // Background with soft fade
+    ctx.fillStyle = `rgba(0,0,10,${0.7 + p4 * 0.3})`;
+    ctx.fillRect(0, 0, CW, CH);
+    // Letterbox slowly retracting
+    const barRetract = 50 * (1 - p4);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CW, barRetract); ctx.fillRect(0, CH - barRetract, CW, barRetract);
+
+    // Golden/white sparkles raining down
+    for (let i = 0; i < 30; i++) {
+      const sx = (i * 37 + t * 40) % CW;
+      const sy = ((t - 6) * 120 + i * 29) % (CH + 20) - 10;
+      const sparkAlpha = (1 - p4) * (0.3 + Math.sin(t * 5 + i) * 0.2);
+      const colors = ['#ffd644', '#ffffff', '#aaccff'];
+      ctx.fillStyle = colors[i % 3];
+      ctx.globalAlpha = Math.max(0, sparkAlpha);
+      const sSize = 1.5 + Math.sin(t * 3 + i * 0.5) * 1;
+      ctx.fillRect(sx, sy, sSize, sSize);
+    }
+    ctx.globalAlpha = 1;
+
+    // Soft vignette
+    const softVig = ctx.createRadialGradient(centerX, centerY, CW * 0.15, centerX, centerY, CW * 0.5);
+    softVig.addColorStop(0, 'rgba(0,0,0,0)');
+    softVig.addColorStop(1, `rgba(0,0,0,${0.4 * (1 - p4)})`);
+    ctx.fillStyle = softVig; ctx.fillRect(0, 0, CW, CH);
+
+    // Lingering lore quote & progress
+    if (p4 < 0.7) {
+      ctx.globalAlpha = 1 - p4 / 0.7;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#99aacc'; ctx.font = 'italic 15px monospace';
+      const loreText = MATTER_LORE[matterCutsceneIndex] || '"The fragment pulses with unknown energy..."';
+      ctx.fillText(loreText, centerX, centerY + 20);
+      // Progress bar
+      const barW = 320, barH = 14;
+      const barX = centerX - barW / 2, barY = CH - 100;
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      ctx.fillRect(barX, barY, barW, barH);
+      for (let i = 0; i < 9; i++) {
+        const segX = barX + i * (barW / 9) + 1;
+        const segW = barW / 9 - 2;
+        ctx.fillStyle = player.matterPieces[i] ? '#aaccff' : 'rgba(255,255,255,0.06)';
+        ctx.fillRect(segX, barY + 1, segW, barH - 2);
+      }
+      ctx.fillStyle = '#ffcc44'; ctx.font = 'bold 16px monospace';
+      ctx.fillText(player.matterCount + ' / 9', centerX, barY + barH + 22);
+      ctx.globalAlpha = 1;
+    }
+
+    // Final fade to black
+    if (p4 > 0.7) {
+      const fadeOut = (p4 - 0.7) / 0.3;
+      ctx.fillStyle = `rgba(0,0,0,${fadeOut})`;
+      ctx.fillRect(0, 0, CW, CH);
+    }
+  }
+
+  // End of cutscene
   if (matterCutsceneTimer <= 0) {
-    gameState = (!player.tutorialDone && player.currentMap==='tutorial') ? STATE.TUTORIAL : STATE.GAMEPLAY;
+    gameState = (!player.tutorialDone && player.currentMap === 'tutorial') ? STATE.TUTORIAL : STATE.GAMEPLAY;
   }
 }
 
@@ -4302,6 +5256,7 @@ function gameLoop(time) {
       drawParticles();
       drawFloatTexts();
       drawLighting();
+      drawAmbientParticles();
       drawHUD();
       drawTutorialOverlay();
       break;
@@ -4351,6 +5306,7 @@ function gameLoop(time) {
       drawParticles();
       drawFloatTexts();
       drawLighting();
+      drawAmbientParticles();
       drawHUD();
       // Objective arrow
       if (!storyIntroActive) {
@@ -4420,6 +5376,16 @@ function gameLoop(time) {
       drawBossIntro();
       break;
 
+    case STATE.BOSS_DEATH:
+      updateShake(dt);
+      updateParticles(dt);
+      updateCamera(player, maps[player.currentMap].width, maps[player.currentMap].height);
+      drawMap(); drawBonfires(); drawItems(); drawNPCs(); drawEnemies(); drawBosses(); drawPlayer();
+      drawParticles();
+      drawLighting();
+      drawBossDeath();
+      break;
+
     case STATE.GAME_OVER:
       drawGameOver();
       break;
@@ -4444,6 +5410,10 @@ function gameLoop(time) {
       updateMath();
       drawMath();
       break;
+
+    case STATE.SAVE_MENU:
+      drawSaveMenu();
+      break;
   }
 
   mouse.clicked = false;
@@ -4464,6 +5434,7 @@ function init() {
   resize();
 
   loadAllAssets();
+  loadTeacherSettings();
   requestAnimationFrame(gameLoop);
 }
 
